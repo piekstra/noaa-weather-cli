@@ -91,7 +91,7 @@ changes the limit, and 0 keeps everything.
 `--json` on any command prints one document tagged `<name>/v1` on stdout.
 Diagnostics go to stderr. `wx info --json` lists capabilities. In `wx gauges --json`,
 `reports` and `possible` count steps of `step_hours`: days for a daily gauge and hours
-for an hourly one.
+for an hourly one. `mrms_hours` gives the MRMS passes behind `mrms_mm`.
 
 | Code | Meaning |
 |---|---|

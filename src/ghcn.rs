@@ -41,9 +41,9 @@ use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use rusqlite::params;
 use serde::Serialize;
 
-use crate::engine::Weather;
+use crate::engine::{HourCounts, Weather};
 use crate::feeds::{self, FeedStatus, LIVE_SOURCE};
-use crate::grid::Region;
+use crate::grid::{Grid, Region};
 use crate::store::{now_secs, Store};
 use crate::window::{floor_hour, Window, HOUR_SECS};
 
@@ -517,8 +517,11 @@ pub struct GaugeTotal {
     /// Part of this total has not been through the archive's checks.
     pub provisional: bool,
     pub gauge_mm: f64,
-    /// MRMS at the gauge's cell, summed over exactly the reported hours.
+    /// MRMS at the gauge's cell, summed over exactly the reported hours. Absent if any of
+    /// them has no product, since a partial sum would make the gauge look high.
     pub mrms_mm: Option<f64>,
+    /// How many of those hours came from each MRMS pass. Recent ones are provisional.
+    pub mrms_hours: HourCounts,
     /// Reports recorded as a trace (too little to measure).
     pub trace_reports: u32,
     /// Reports with no observation time, read as the 07:00 standard.
@@ -705,7 +708,7 @@ impl Weather {
             let w = Window::new(Timestamp::from_second(s)?, Timestamp::from_second(e)?);
             match self.accumulate(w, None).await {
                 Ok(acc) => {
-                    run_grids.insert((s, e), acc.grid);
+                    run_grids.insert((s, e), (acc.grid, acc.hours));
                 }
                 Err(err) => tracing::warn!(error = %err, "MRMS for gauge run failed"),
             }
@@ -714,17 +717,14 @@ impl Weather {
         let possible = (window.hours() / 24) as u32;
         let mut gauges = Vec::new();
         for st in &stations {
-            let mrms_at_gauge = || {
-                station_runs[&st.id]
-                    .iter()
-                    .map(|run| run_grids.get(run).and_then(|g| g.mm_at(st.lat, st.lon)))
-                    .sum::<Option<f64>>()
-            };
+            let mrms_at_gauge =
+                || mrms_over_runs(&station_runs[&st.id], &run_grids, st.lat, st.lon);
             if let Some(stretch) = hourly
                 .get(&st.id)
                 .map(|hours| feeds::longest_stretch(hours))
                 .filter(|s| !s.is_empty())
             {
+                let (mrms, mrms_hours) = mrms_at_gauge();
                 gauges.push(GaugeTotal {
                     id: st.id.clone(),
                     name: st.name.clone(),
@@ -737,7 +737,8 @@ impl Weather {
                     step_hours: 1,
                     provisional: true,
                     gauge_mm: (stretch.iter().map(|h| h.mm).sum::<f64>() * 10.0).round() / 10.0,
-                    mrms_mm: mrms_at_gauge().map(|v| (v * 10.0).round() / 10.0),
+                    mrms_mm: mrms,
+                    mrms_hours,
                     trace_reports: stretch.iter().filter(|h| h.trace).count() as u32,
                     assumed_time_reports: 0,
                     covers: [
@@ -751,7 +752,7 @@ impl Weather {
                 continue;
             };
             let gauge_tenths: i64 = rs.iter().map(|(r, _, _)| r.prcp).sum();
-            let mrms = mrms_at_gauge();
+            let (mrms, mrms_hours) = mrms_at_gauge();
             let first_end = rs.iter().map(|(_, e, _)| *e).min().expect("non-empty");
             let last_end = rs.iter().map(|(_, e, _)| *e).max().expect("non-empty");
             gauges.push(GaugeTotal {
@@ -768,7 +769,8 @@ impl Weather {
                     .iter()
                     .any(|(r, _, _)| r.s_flag.as_deref() == Some(LIVE_SOURCE)),
                 gauge_mm: gauge_tenths as f64 / 10.0,
-                mrms_mm: mrms.map(|v| (v * 10.0).round() / 10.0),
+                mrms_mm: mrms,
+                mrms_hours,
                 trace_reports: rs
                     .iter()
                     .filter(|(r, _, _)| r.m_flag.as_deref() == Some("T"))
@@ -813,9 +815,73 @@ fn contiguous_runs(ends: impl Iterator<Item = i64>) -> Vec<(i64, i64)> {
     runs
 }
 
+/// MRMS at one point over a gauge's runs of hours, rounded to a tenth of a millimeter, and
+/// how many of those hours came from each pass.
+fn mrms_over_runs(
+    runs: &[(i64, i64)],
+    grids: &HashMap<(i64, i64), (Grid, HourCounts)>,
+    lat: f64,
+    lon: f64,
+) -> (Option<f64>, HourCounts) {
+    let mut hours = HourCounts::default();
+    let mut total = Some(0.0);
+    for run in runs {
+        let at = grids.get(run).and_then(|(grid, counts)| {
+            hours.merge(counts);
+            grid.mm_at(lat, lon)
+        });
+        total = total.zip(at).map(|(sum, mm)| sum + mm);
+    }
+    let complete = total.filter(|_| hours.missing == 0);
+    (complete.map(|mm| (mm * 10.0).round() / 10.0), hours)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::GridGeom;
+
+    #[test]
+    fn mrms_at_a_gauge_carries_its_passes_and_refuses_a_partial_sum() {
+        let geom = GridGeom {
+            nx: 1,
+            ny: 1,
+            lat0: 26.0,
+            lon0: -80.0,
+            dlat: 0.01,
+            dlon: 0.01,
+        };
+        let run = |tenths, pass2, pass1, missing| {
+            let grid = Grid {
+                geom: geom.clone(),
+                tenths: vec![tenths],
+            };
+            let hours = HourCounts {
+                pass2,
+                pass1,
+                missing,
+                ..Default::default()
+            };
+            (grid, hours)
+        };
+        let grids = HashMap::from([
+            ((0, 1), run(30, 1, 0, 0)),
+            ((1, 2), run(12, 0, 1, 0)),
+            ((2, 3), run(12, 0, 0, 1)),
+        ]);
+        let at = |runs: &[(i64, i64)]| mrms_over_runs(runs, &grids, 26.0, -80.0);
+
+        let (mm, hours) = at(&[(0, 1), (1, 2)]);
+        assert_eq!(mm, Some(4.2));
+        assert_eq!((hours.pass2, hours.provisional()), (1, 1));
+
+        let (mm, hours) = at(&[(0, 1), (2, 3)]);
+        assert_eq!(mm, None);
+        assert_eq!(hours.missing, 1);
+
+        // A run whose sum could not be made.
+        assert_eq!(at(&[(0, 1), (8, 9)]).0, None);
+    }
 
     fn tz() -> TimeZone {
         TimeZone::get("America/New_York").unwrap()

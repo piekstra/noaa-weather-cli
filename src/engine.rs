@@ -136,6 +136,15 @@ impl HourCounts {
     pub fn provisional(&self) -> u32 {
         self.pass1 + self.radar
     }
+
+    pub(crate) fn merge(&mut self, other: &HourCounts) {
+        self.pass2 += other.pass2;
+        self.pass1 += other.pass1;
+        self.radar += other.radar;
+        self.missing += other.missing;
+        self.quarters += other.quarters;
+        self.missing_quarters += other.missing_quarters;
+    }
 }
 
 /// Files read to answer a request.

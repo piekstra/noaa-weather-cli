@@ -354,6 +354,7 @@ fn airport(id: &str, lat: f64, reports: u32, step_hours: u32) -> GaugeTotal {
         provisional: step_hours == 1,
         gauge_mm: 0.0,
         mrms_mm: None,
+        mrms_hours: Default::default(),
         trace_reports: 0,
         assumed_time_reports: 0,
         covers: [Timestamp::UNIX_EPOCH, Timestamp::UNIX_EPOCH],

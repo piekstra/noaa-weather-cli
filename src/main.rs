@@ -1139,6 +1139,11 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
         "station", "network", "name", "reports", "gauge", "MRMS", "diff"
     );
     for g in &rows {
+        let mrms_mark = if g.mrms_hours.provisional() > 0 {
+            "*"
+        } else {
+            " "
+        };
         let (mrms, diff) = match g.mrms_mm {
             Some(m) => (
                 format!("{:.2}\"", mm_to_in(m)),
@@ -1148,7 +1153,7 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
         };
         let unit = if g.step_hours == 1 { "h" } else { "d" };
         println!(
-            "  {:<id_width$} {:<9} {:<28} {:>7}  {:>6.2}\"{} {:>7}  {:>7}",
+            "  {:<id_width$} {:<9} {:<28} {:>7}  {:>6.2}\"{} {:>7}{} {:>7}",
             g.id,
             g.network_label,
             g.name.chars().take(28).collect::<String>(),
@@ -1156,6 +1161,7 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
             mm_to_in(g.gauge_mm),
             if g.provisional { "*" } else { " " },
             mrms,
+            mrms_mark,
             diff
         );
     }
@@ -1181,7 +1187,13 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
     println!("  those hours at the gauge's 1 km cell. In the reports column, d counts days");
     println!("  and h counts hours.");
     if rows.iter().any(|g| g.provisional) {
-        println!("  * Provisional: read from the network directly, not yet through the archive.");
+        println!("  * Gauge: read from the network directly, not yet through the archive.");
+    }
+    if rows.iter().any(|g| g.mrms_hours.provisional() > 0) {
+        println!("  * MRMS: includes hours not yet through the final pass, so it can change.");
+    }
+    if rows.iter().any(|g| g.mrms_hours.missing > 0) {
+        println!("  — MRMS has no product for some of those hours, so no figure is shown.");
     }
     println!("  {} · {}", ghcn::ATTRIBUTION, mrms::ATTRIBUTION);
     Ok(())
