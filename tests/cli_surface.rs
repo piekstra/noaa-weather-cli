@@ -31,6 +31,17 @@ fn json_of(out: &[u8]) -> Value {
 }
 
 #[test]
+fn an_area_outside_mrms_is_not_found() {
+    let (mut c, _d) = wx();
+    c.args(["rain", "6h", "--at", "0,0"]).assert().code(4);
+    let (mut c, _d) = wx();
+    c.args(["map", "6h", "--region", "0,0,1,1"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("outside MRMS coverage"));
+}
+
+#[test]
 fn every_command_has_help() {
     for args in [
         vec!["--help"],

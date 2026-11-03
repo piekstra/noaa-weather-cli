@@ -319,9 +319,22 @@ impl Ctx {
         })
     }
 
+    /// [`Self::requested_region`], or not found when no MRMS grid reaches it.
+    fn region(&self, points: &[(f64, f64)]) -> Result<Region> {
+        let region = self.requested_region(points)?;
+        if region.intersect(&MRMS_DOMAIN).is_none() {
+            return Err(CliError::NotFound(format!(
+                "that area is outside MRMS coverage: longitude {} to {}, latitude {} to {}",
+                MRMS_DOMAIN.west, MRMS_DOMAIN.east, MRMS_DOMAIN.south, MRMS_DOMAIN.north
+            ))
+            .into());
+        }
+        Ok(region)
+    }
+
     /// A configured region, else a box around the points, else a box around the
     /// saved places. A usage error when none of those say where to look.
-    fn region(&self, points: &[(f64, f64)]) -> Result<Region> {
+    fn requested_region(&self, points: &[(f64, f64)]) -> Result<Region> {
         if let Some(r) = self.region_flag {
             return Ok(r);
         }
