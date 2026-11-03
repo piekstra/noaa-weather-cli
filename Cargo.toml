@@ -1,6 +1,6 @@
 [package]
 name = "noaa-weather-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Rainfall, radar, alerts, forecasts and current conditions from NOAA and NWS raw data, at the terminal. No API keys. Unofficial."

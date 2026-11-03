@@ -79,7 +79,9 @@ west,south,east,north` says otherwise. Commands that draw or list a whole area,
 `${XDG_CONFIG_HOME:-~/.config}/wx/config.json`; `wx config path` prints the file.
 
 Downloaded grids are cached in SQLite under your cache directory, so a repeated
-question downloads nothing.
+question downloads nothing. A grid is dropped 92 days after it was downloaded, and the
+file stops growing because SQLite reuses the space. `wx config set retain_days N`
+changes the limit, and 0 keeps everything.
 
 ## Output and exit codes
 
@@ -99,7 +101,7 @@ The crate is also the library `noaa_weather`. A program embedding it skips the
 CLI's dependencies:
 
 ```toml
-noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.1.0", default-features = false }
+noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.2.0", default-features = false }
 ```
 
 ## Data

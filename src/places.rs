@@ -30,6 +30,9 @@ pub struct UserConfig {
     /// NWS alert area: a state or marine code such as `FL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert_area: Option<String>,
+    /// Days to keep a downloaded grid; 0 keeps everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_days: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub places: Vec<Place>,
 }

@@ -6,8 +6,10 @@
 //!
 //! ## What is cached, and for how long
 //!
-//! * **Pass 2 grids — forever.** A final MRMS analysis never changes, so once
-//!   fetched it is never fetched again. A cropped hour is ~22 KB.
+//! * **Pass 2 grids — until the retention limit.** A final MRMS analysis never
+//!   changes, so it is not fetched twice while it is kept. A cropped hour is ~22 KB.
+//!   [`Store::prune_downloaded_before`] drops grids by when they were downloaded, and
+//!   SQLite reuses the freed pages, so the file stops growing rather than shrinking.
 //! * **Pass 1 / radar-only grids — until superseded.** Kept so the newest hour
 //!   is not re-downloaded on every request, then pruned once a day old (by
 //!   then the Pass 2 grid for the same hour exists).
@@ -118,6 +120,7 @@ impl Store {
                 PRIMARY KEY (product, valid, region)
             );
             CREATE INDEX IF NOT EXISTS mrms_grids_pass ON mrms_grids (pass, valid);
+            CREATE INDEX IF NOT EXISTS mrms_grids_fetched ON mrms_grids (fetched_at);
 
             CREATE TABLE IF NOT EXISTS mrms_absent (
                 product    TEXT    NOT NULL,
@@ -304,6 +307,16 @@ impl Store {
         Ok(n)
     }
 
+    /// Drop grids downloaded before `before`, final ones included. By download time
+    /// rather than the hour a grid covers, so a look back at an old storm stays cached
+    /// as long as a look at yesterday.
+    pub fn prune_downloaded_before(&self, before: Timestamp) -> Result<usize> {
+        Ok(self.pool.get()?.execute(
+            "DELETE FROM mrms_grids WHERE fetched_at < ?1",
+            params![before.as_second()],
+        )?)
+    }
+
     pub fn stats(&self) -> Result<CacheStats> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
@@ -436,6 +449,29 @@ mod tests {
         s.mark_absent(&p, v).unwrap();
         s.clear_absent(&p, v).unwrap();
         assert!(!s.recently_absent(&p, v, 600).unwrap());
+    }
+
+    #[test]
+    fn pruning_by_download_time_ignores_the_hour_a_grid_covers() {
+        let s = Store::open_in_memory().unwrap();
+        let (r, p2) = (DEFAULT_REGION, Product::hourly(Pass::Pass2));
+        let (old, recent) = (t("2020-01-01T00:00:00Z"), t("2020-01-01T01:00:00Z"));
+        s.put_grid(&p2, old, &r, &grid()).unwrap();
+        s.put_grid(&p2, recent, &r, &grid()).unwrap();
+        s.pool()
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE mrms_grids SET fetched_at = ?1 WHERE valid = ?2",
+                params![1_000, recent.as_second()],
+            )
+            .unwrap();
+
+        // `recent` was downloaded long ago, and `old` was downloaded just now.
+        let cutoff = Timestamp::from_second(2_000).unwrap();
+        assert_eq!(s.prune_downloaded_before(cutoff).unwrap(), 1);
+        assert!(s.has_grid(&p2, old, &r).unwrap());
+        assert!(!s.has_grid(&p2, recent, &r).unwrap());
     }
 
     #[test]

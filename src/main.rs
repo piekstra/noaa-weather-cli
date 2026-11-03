@@ -46,7 +46,7 @@ use noaa_weather::{ghcn, mrms, ramp, Config, Store, Weather, WindowSpec, MRMS_DO
 
 const BIN: &str = "wx";
 const REPO: &str = "piekstra/noaa-weather-cli";
-const CONFIG_KEYS: &str = "region, tz, db, alert_area";
+const CONFIG_KEYS: &str = "region, tz, db, alert_area, retain_days";
 
 /// Rainfall, radar, alerts and forecasts from NOAA and NWS raw data. No API
 /// keys. Unofficial; not affiliated with NOAA or the National Weather Service.
@@ -235,7 +235,7 @@ enum ConfigCmd {
     Show,
     /// Create the file if it does not exist.
     Init,
-    /// Set a value. Keys: region, tz, db, alert_area.
+    /// Set a value. Keys: region, tz, db, alert_area, retain_days.
     Set { key: String, value: String },
     /// Clear a value.
     Unset { key: String },
@@ -369,10 +369,15 @@ impl Ctx {
     }
 
     fn weather_for(&self, region: Region) -> Result<Weather> {
+        let defaults = Config::new(region);
         let cfg = Config {
             tz: self.tz.clone(),
             concurrency: self.concurrency,
-            ..Config::new(region)
+            retain_days: self
+                .user
+                .retain_days
+                .map_or(defaults.retain_days, |days| (days > 0).then_some(days)),
+            ..defaults
         };
         Weather::new(cfg, self.store()?)
     }
@@ -735,6 +740,8 @@ struct StatusOut {
     pass2_through_local: String,
     region: Region,
     cache: noaa_weather::store::CacheStats,
+    /// Days a downloaded grid stays cached; null keeps everything.
+    retain_days: Option<i64>,
 }
 
 async fn status(wx: &Weather, json: bool) -> Result<()> {
@@ -748,6 +755,7 @@ async fn status(wx: &Weather, json: bool) -> Result<()> {
             pass2_through_local: local_label(a.pass2_through, tz),
             region: *wx.region(),
             cache,
+            retain_days: wx.cfg.retain_days,
         };
         return emit("wx-status", &out);
     }
@@ -792,6 +800,10 @@ async fn status(wx: &Weather, json: bool) -> Result<()> {
         "  gauges: {} stations, {} daily reports",
         cache.gauge_stations, cache.gauge_reports
     );
+    match wx.cfg.retain_days {
+        Some(days) => println!("  grids are dropped {days} days after download"),
+        None => println!("  grids are kept until the file is deleted"),
+    }
     Ok(())
 }
 
@@ -1419,6 +1431,15 @@ fn config_cmd(ctx: &Ctx, cmd: ConfigCmd) -> Result<()> {
                 }
                 "db" => user.db = Some(PathBuf::from(value)),
                 "alert_area" => user.alert_area = Some(value),
+                "retain_days" => {
+                    let days = value.parse().ok().filter(|d: &i64| *d >= 0);
+                    user.retain_days = Some(days.ok_or_else(|| {
+                        CliError::Usage(format!(
+                            "retain_days must be a whole number of days, or 0 to keep \
+                             everything; got {value:?}"
+                        ))
+                    })?);
+                }
                 other => {
                     return Err(CliError::Usage(format!(
                         "unknown key {other:?}; keys: {CONFIG_KEYS}"
@@ -1437,6 +1458,7 @@ fn config_cmd(ctx: &Ctx, cmd: ConfigCmd) -> Result<()> {
                 "tz" => user.tz = None,
                 "db" => user.db = None,
                 "alert_area" => user.alert_area = None,
+                "retain_days" => user.retain_days = None,
                 other => {
                     return Err(CliError::Usage(format!(
                         "unknown key {other:?}; keys: {CONFIG_KEYS}"

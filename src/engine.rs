@@ -19,6 +19,7 @@
 //! instead of 720 hourly ones (~600 MB).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,11 +31,14 @@ use serde::Serialize;
 use crate::ghcn::{GhcnClient, DEFAULT_GHCN_URL};
 use crate::grid::{Grid, Region};
 use crate::mrms::{MrmsClient, Pass, Product, DEFAULT_BUCKET_URL, PASS2_BLOCKS};
-use crate::store::Store;
+use crate::store::{self, Store};
 use crate::window::{floor_quarter, Resolved, Window, WindowSpec, HOUR_SECS, QUARTER_SECS};
 
 /// Longest window served by default: a quarter year.
 pub const DEFAULT_MAX_HOURS: i64 = 24 * 92;
+
+/// Days a downloaded grid stays cached: the longest window a request may ask for.
+pub const DEFAULT_RETAIN_DAYS: i64 = 92;
 
 /// Longest window for an hour-by-hour series (one bar per hour).
 pub const MAX_SERIES_HOURS: i64 = 24 * 14;
@@ -55,6 +59,8 @@ pub struct Config {
     /// Simultaneous downloads.
     pub concurrency: usize,
     pub max_hours: i64,
+    /// Days to keep a downloaded grid. `None` keeps everything.
+    pub retain_days: Option<i64>,
 }
 
 impl Config {
@@ -67,6 +73,7 @@ impl Config {
             ghcn_url: DEFAULT_GHCN_URL.into(),
             concurrency: 6,
             max_hours: DEFAULT_MAX_HOURS,
+            retain_days: Some(DEFAULT_RETAIN_DAYS),
         }
     }
 }
@@ -170,6 +177,8 @@ pub struct Weather {
     ghcn: GhcnClient,
     availability: Mutex<Option<(Instant, Availability)>>,
     latest_quarter: Mutex<Option<(Instant, Timestamp)>>,
+    /// Unix seconds of the last retention pass.
+    retained_at: AtomicI64,
 }
 
 /// How long a cached availability probe is trusted.
@@ -197,6 +206,7 @@ impl Weather {
             ghcn,
             availability: Mutex::new(None),
             latest_quarter: Mutex::new(None),
+            retained_at: AtomicI64::new(0),
         })
     }
 
@@ -739,6 +749,36 @@ impl Weather {
         Ok((None, any_download))
     }
 
+    /// Apply the retention limit, at most once an hour. The cache grows only here, so
+    /// no other path needs it. A failure costs only disk, so the download that prompted
+    /// it goes on.
+    fn forget_old_grids(&self) {
+        let Some(days) = self.cfg.retain_days else {
+            return;
+        };
+        let now = store::now_secs();
+        let last = self.retained_at.load(Ordering::Relaxed);
+        if now - last < HOUR_SECS
+            || self
+                .retained_at
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+        {
+            return;
+        }
+        let cutoff = now
+            .saturating_sub(days.saturating_mul(24 * HOUR_SECS))
+            .max(0);
+        let pruned = Timestamp::from_second(cutoff)
+            .map_err(anyhow::Error::from)
+            .and_then(|before| self.store.prune_downloaded_before(before));
+        match pruned {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(grids = n, days, "dropped cached grids past retention"),
+            Err(e) => tracing::warn!(error = %format!("{e:#}"), "cache retention failed"),
+        }
+    }
+
     /// Cache, then bucket. `None` when the file does not exist.
     async fn load_one(&self, p: &Product, end_hour: i64) -> Result<Option<(Grid, bool)>> {
         self.load_at(p, ts_hour(end_hour)).await
@@ -764,6 +804,7 @@ impl Weather {
         match self.client.fetch(p, valid, region).await? {
             Some(g) => {
                 self.store.put_grid(p, valid, region, &g)?;
+                self.forget_old_grids();
                 Ok(Some((g, true)))
             }
             None => {
@@ -834,6 +875,57 @@ fn plan_items(s: i64, e: i64, p2: i64, cached: &HashMap<u32, HashSet<i64>>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_a_long_downloaded_grid(store: &Store, p: &Product, valid: Timestamp, r: &Region) {
+        let geom = crate::grid::GridGeom {
+            nx: 1,
+            ny: 1,
+            lat0: 27.0,
+            lon0: -80.1,
+            dlat: 0.01,
+            dlon: 0.01,
+        };
+        let grid = Grid {
+            geom,
+            tenths: vec![5],
+        };
+        store.put_grid(p, valid, r, &grid).unwrap();
+        store
+            .pool()
+            .get()
+            .unwrap()
+            .execute("UPDATE mrms_grids SET fetched_at = 1000", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn retention_runs_at_most_once_an_hour_and_can_be_turned_off() {
+        let region = Region::parse("-80.2,26.8,-80.0,27.0").unwrap();
+        let p = Product::hourly(Pass::Pass2);
+        let valid = Timestamp::from_second(1_800_000_000).unwrap();
+        let weather = |retain_days| {
+            let store = Store::open_in_memory().unwrap();
+            store_a_long_downloaded_grid(&store, &p, valid, &region);
+            let cfg = Config {
+                retain_days,
+                ..Config::new(region)
+            };
+            Weather::new(cfg, store).unwrap()
+        };
+        let cached = |wx: &Weather| wx.store().has_grid(&p, valid, &region).unwrap();
+
+        let keeps_all = weather(None);
+        keeps_all.forget_old_grids();
+        assert!(cached(&keeps_all));
+
+        let wx = weather(Some(1));
+        wx.forget_old_grids();
+        assert!(!cached(&wx));
+
+        store_a_long_downloaded_grid(wx.store(), &p, valid, &region);
+        wx.forget_old_grids();
+        assert!(cached(&wx), "a second pass within the hour should wait");
+    }
 
     /// Hours covered by a plan, each exactly once, as a sorted list.
     fn covered(items: &[Item]) -> Vec<i64> {

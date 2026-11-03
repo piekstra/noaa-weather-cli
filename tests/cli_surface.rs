@@ -207,6 +207,20 @@ fn config_set_validates_and_rejects_unknown_keys() {
 }
 
 #[test]
+fn retain_days_takes_a_whole_number_of_days() {
+    for bad in ["soon", "1.5", "-1"] {
+        let (mut c, _d) = wx();
+        c.args(["config", "set", "retain_days", bad])
+            .assert()
+            .code(2);
+    }
+    let (mut c, _d) = wx();
+    c.args(["config", "set", "retain_days", "30"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn no_color_env_is_accepted() {
     let (mut c, _d) = wx();
     c.env("NO_COLOR", "1").arg("info").assert().success();
