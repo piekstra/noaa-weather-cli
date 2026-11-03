@@ -509,7 +509,8 @@ pub struct GaugeTotal {
     /// Reports counted: daily ones whose full 24 h falls inside the window, or the
     /// hours of an hourly gauge's longest unbroken stretch inside it.
     pub reports: u32,
-    /// The most reports the window could hold at this gauge's step.
+    /// The most reports the window could hold at this gauge's step. Like `reports`, it
+    /// counts steps of `step_hours`, so rows of different steps compare only as a ratio.
     pub possible: u32,
     /// Hours one report covers: 24 or 1.
     pub step_hours: u32,
@@ -653,15 +654,22 @@ impl Weather {
                 .filter(|s| !archived.contains(&s.id)),
         );
         reports.extend(feeds::reports_between(self.store(), first, last)?);
-        let hourly = feeds::hours_between(
+        let mut hourly = feeds::hours_between(
             self.store(),
             window.start.as_second(),
             window.end.as_second(),
         )?;
+        // The feeds' tables hold every region asked about, and a gauge shown nowhere
+        // should not cost an MRMS sum.
+        let in_region: HashSet<&str> = stations.iter().map(|s| s.id.as_str()).collect();
+        hourly.retain(|id, _| in_region.contains(id.as_str()));
 
         // Keep reports whose 24 h lies inside the window, grouped per station.
         let mut by_station: BTreeMap<String, Vec<(Report, Timestamp, bool)>> = BTreeMap::new();
         for r in reports {
+            if !in_region.contains(r.station.as_str()) {
+                continue;
+            }
             let Some((end, assumed)) = r.period_end(&tz) else {
                 continue;
             };

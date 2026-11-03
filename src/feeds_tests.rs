@@ -57,6 +57,36 @@ fn changed_columns_fail_instead_of_reading_as_no_rain() {
 }
 
 #[test]
+fn a_changed_date_format_fails_instead_of_reading_as_no_rain() {
+    let bad_date = COCORAHS.replacen("2026-01-15", "01/15/2026", usize::MAX);
+    assert_ne!(bad_date, COCORAHS);
+    assert!(parse_cocorahs(&bad_date).is_err());
+    let bad_valid = IEM_ASOS.replace("2026-01-15 ", "15 Jan 2026 ");
+    assert_ne!(bad_valid, IEM_ASOS);
+    assert!(parse_iem_hours(&bad_valid).is_err());
+}
+
+#[test]
+fn a_changed_usgs_response_fails_and_one_bad_row_does_not() {
+    assert!(parse_usgs_page(r#"{"items":[]}"#).is_err());
+    assert!(parse_usgs_stations(r#"{"items":[]}"#).is_err());
+    assert!(parse_usgs_page(r#"{"features":[]}"#)
+        .unwrap()
+        .readings
+        .is_empty());
+    let row = |time: &str| {
+        format!(
+            r#"{{"properties":{{"monitoring_location_id":"USGS-09999001","time_series_id":"a","time":"{time}","value":"0.10"}}}}"#
+        )
+    };
+    let page = |rows: &[String]| format!(r#"{{"features":[{}]}}"#, rows.join(","));
+    let one_bad = page(&[row("2026-01-15T14:15:00Z"), row("soon")]);
+    assert_eq!(parse_usgs_page(&one_bad).unwrap().readings.len(), 1);
+    let all_bad = page(&[row("soon"), row("later")]);
+    assert!(parse_usgs_page(&all_bad).is_err());
+}
+
+#[test]
 fn reads_a_usgs_page_and_skips_outages() {
     let page = parse_usgs_page(USGS_VALUES).unwrap();
     assert_eq!(page.readings.len(), 1);
@@ -277,6 +307,16 @@ fn plans_what_to_read() {
         plan_reads(Some((100, 200)), (300, 400), 20, &PACE),
         (vec![(300, 400)], (300, 400))
     );
+    // Hours never read wait for nothing, whether they touch what was read or overlap it,
+    // and the hours already read still wait.
+    assert_eq!(
+        plan_reads(Some((100, 200)), (200, 260), 5, &PACE),
+        (vec![(200, 260)], (100, 260))
+    );
+    assert_eq!(
+        plan_reads(Some((100, 200)), (150, 260), 5, &PACE),
+        (vec![(200, 260)], (100, 260))
+    );
 }
 
 fn hour(end: i64) -> HourReading {
@@ -420,6 +460,10 @@ fn test_region() -> Region {
 }
 
 fn weather_against(stub: &Stub) -> Weather {
+    weather_with_deadline(stub, DEFAULT_FEED_DEADLINE)
+}
+
+fn weather_with_deadline(stub: &Stub, feed_deadline: Duration) -> Weather {
     let cfg = Config {
         tz: TimeZone::UTC,
         bucket_url: stub.url.clone(),
@@ -427,6 +471,7 @@ fn weather_against(stub: &Stub) -> Weather {
         usgs_url: stub.url.clone(),
         cocorahs_url: stub.url.clone(),
         iem_url: stub.url.clone(),
+        feed_deadline,
         ..Config::new(test_region())
     };
     let wx = Weather::new(cfg, Store::open_in_memory().unwrap()).unwrap();
@@ -507,6 +552,74 @@ async fn a_repeated_question_asks_nobody_and_the_gauges_come_back_provisional() 
     assert_eq!((asos.step_hours, asos.network), (1, Network::Asos));
     assert!((asos.gauge_mm - 5.1).abs() < 0.01, "{}", asos.gauge_mm);
     assert!(report.feeds.iter().all(|f| f.error.is_none()));
+}
+
+#[tokio::test]
+async fn a_stalled_feed_is_named_and_does_not_hold_up_the_answer() {
+    let server = stub(|_| {
+        std::thread::sleep(Duration::from_secs(5));
+        None
+    });
+    let wx = weather_with_deadline(&server, Duration::from_millis(200));
+    let end = recent_end();
+    let start = Timestamp::from_second(end.as_second() - 26 * HOUR).unwrap();
+    let began = std::time::Instant::now();
+    let statuses = wx.refresh_feeds(Window::new(start, end), false).await;
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    for status in statuses {
+        let error = status.error.unwrap_or_default();
+        assert!(
+            error.contains("no complete answer"),
+            "{}: {error}",
+            status.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_gauge_outside_the_region_costs_no_mrms_sum() {
+    let end = recent_end();
+    let start = Timestamp::from_second(end.as_second() - 26 * HOUR).unwrap();
+    let window = Window::new(start, end);
+    let requests_for_gauges = |foreign: bool| {
+        let route = feed_route(end);
+        async move {
+            let server = stub(route);
+            let wx = weather_against(&server);
+            wx.refresh_feeds(window, false).await;
+            if foreign {
+                let far = Station {
+                    id: "USGS-09999999".into(),
+                    name: "Far away".into(),
+                    lat: 25.0,
+                    lon: -81.0,
+                    elev_m: None,
+                };
+                put_stations(wx.store(), &[far]).unwrap();
+                let hour_end = end.as_second() - 3 * HOUR;
+                let far_hour = HourReading {
+                    station: "USGS-09999999".into(),
+                    end: hour_end,
+                    mm: 1.0,
+                    trace: false,
+                    measured_rain: true,
+                };
+                put_hours(wx.store(), &[far_hour]).unwrap();
+            }
+            let asked = server.requests.load(Ordering::SeqCst);
+            let report = wx.gauges(window).await.unwrap();
+            assert!(report.gauges.iter().all(|g| g.id != "USGS-09999999"));
+            server.requests.load(Ordering::SeqCst) - asked
+        }
+    };
+    assert_eq!(
+        requests_for_gauges(true).await,
+        requests_for_gauges(false).await
+    );
 }
 
 #[tokio::test]

@@ -89,7 +89,9 @@ changes the limit, and 0 keeps everything.
 ## Output and exit codes
 
 `--json` on any command prints one document tagged `<name>/v1` on stdout.
-Diagnostics go to stderr. `wx info --json` lists capabilities.
+Diagnostics go to stderr. `wx info --json` lists capabilities. In `wx gauges --json`,
+`reports` and `possible` count steps of `step_hours`: days for a daily gauge and hours
+for an hourly one.
 
 | Code | Meaning |
 |---|---|

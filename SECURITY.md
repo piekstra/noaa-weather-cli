@@ -30,10 +30,9 @@ What remains to care about:
 
 - **Parsing untrusted files.** GRIB2, Parquet, CSV and JSON are decoded from the
   network. A USGS next link contributes only its query, so a page cannot send the
-  client to another host. The
-  GRIB2 reader accepts only the templates MRMS uses and returns an error for
-  anything else. Decompression stops at 128 MiB, and the embedded PNG must match the
-  grid the file declares.
+  client to another host. The GRIB2 reader accepts only the templates MRMS uses and
+  returns an error for anything else. Decompression stops at 128 MiB, and the embedded
+  PNG must match the grid the file declares.
 - **`wx api`.** It sends GET requests only, and only to `api.weather.gov`.
 - **Dependency advisories.** CI runs `cargo audit` and `cargo deny`.
 - **No secrets or personal data in the repo.** CI runs gitleaks, and

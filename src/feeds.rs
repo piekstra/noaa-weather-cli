@@ -39,6 +39,9 @@ use crate::window::Window;
 pub const DEFAULT_USGS_URL: &str = "https://api.waterdata.usgs.gov/ogcapi/v1";
 pub const DEFAULT_COCORAHS_URL: &str = "https://data.cocorahs.org";
 pub const DEFAULT_IEM_URL: &str = "https://mesonet.agron.iastate.edu";
+/// Several times the slowest first read seen: 13 s, USGS over a 10 by 6 degree box and
+/// 3 days of mostly 5 and 15 minute readings.
+pub const DEFAULT_FEED_DEADLINE: Duration = Duration::from_secs(60);
 
 /// `s_flag` on a report from a feed, so a total can say it holds unchecked figures.
 pub const LIVE_SOURCE: &str = "live";
@@ -277,7 +280,7 @@ struct UsgsPage {
 fn parse_usgs_page(body: &str) -> Result<UsgsPage> {
     #[derive(Deserialize)]
     struct Doc {
-        #[serde(default)]
+        // Required: a body without it is a changed response, not an empty one.
         features: Vec<Feature>,
         #[serde(default)]
         links: Vec<Link>,
@@ -302,15 +305,17 @@ fn parse_usgs_page(body: &str) -> Result<UsgsPage> {
     }
     let doc: Doc = serde_json::from_str(body).context("USGS continuous values")?;
     let mut readings = Vec::with_capacity(doc.features.len());
+    let (mut understood, mut not_understood) = (0, 0);
     for f in doc.features {
         let p = f.properties;
+        let Ok(at) = p.time.parse::<Timestamp>() else {
+            not_understood += 1;
+            continue;
+        };
+        understood += 1;
         let Some(inches) = p.value.and_then(|v| v.parse::<f64>().ok()) else {
             continue;
         };
-        let at: Timestamp = p
-            .time
-            .parse()
-            .with_context(|| format!("USGS time {:?}", p.time))?;
         readings.push(UsgsReading {
             site: p.monitoring_location_id,
             series: p.time_series_id,
@@ -318,6 +323,10 @@ fn parse_usgs_page(body: &str) -> Result<UsgsPage> {
             inches,
         });
     }
+    anyhow::ensure!(
+        understood > 0 || not_understood == 0,
+        "the USGS time format has changed"
+    );
     let next = doc
         .links
         .into_iter()
@@ -329,7 +338,6 @@ fn parse_usgs_page(body: &str) -> Result<UsgsPage> {
 fn parse_usgs_stations(body: &str) -> Result<Vec<Station>> {
     #[derive(Deserialize)]
     struct Doc {
-        #[serde(default)]
         features: Vec<Feature>,
     }
     #[derive(Deserialize)]
@@ -540,10 +548,11 @@ fn parse_iem_hours(body: &str) -> Result<Vec<HourReading>> {
             not_understood += 1;
             continue;
         };
-        understood += 1;
         let Ok(valid) = civil::DateTime::strptime("%Y-%m-%d %H:%M", row.valid.trim()) else {
+            not_understood += 1;
             continue;
         };
+        understood += 1;
         let at = valid.to_zoned(TimeZone::UTC)?.timestamp().as_second();
         let end = (at + HOUR / 2).div_euclid(HOUR) * HOUR;
         if (at - end).abs() > ASOS_MAX_OFFSET_SECS {
@@ -561,7 +570,7 @@ fn parse_iem_hours(body: &str) -> Result<Vec<HourReading>> {
     }
     anyhow::ensure!(
         understood > 0 || not_understood == 0,
-        "the IEM ASOS columns have changed"
+        "the IEM ASOS format has changed"
     );
     Ok(hours
         .into_iter()
@@ -625,6 +634,10 @@ fn parse_cocorahs(body: &str) -> Result<CocorahsDay> {
             not_understood += 1;
             continue;
         };
+        let Ok(date) = civil::Date::strptime("%Y-%m-%d", &row.date) else {
+            not_understood += 1;
+            continue;
+        };
         understood += 1;
         let (prcp, m_flag) = match row.amount.as_str() {
             "T" => (0, Some("T".to_string())),
@@ -635,9 +648,6 @@ fn parse_cocorahs(body: &str) -> Result<CocorahsDay> {
                 }
                 _ => continue,
             },
-        };
-        let Ok(date) = civil::Date::strptime("%Y-%m-%d", &row.date) else {
-            continue;
         };
         let id = cocorahs_id(&row.number);
         if seen.insert(id.clone()) {
@@ -662,7 +672,7 @@ fn parse_cocorahs(body: &str) -> Result<CocorahsDay> {
     }
     anyhow::ensure!(
         understood > 0 || not_understood == 0,
-        "the CoCoRaHS export columns have changed"
+        "the CoCoRaHS export format has changed"
     );
     Ok(out)
 }
@@ -670,8 +680,9 @@ fn parse_cocorahs(body: &str) -> Result<CocorahsDay> {
 // ------------------------------------------------------------------- planning
 
 /// What to read so a span of unix seconds is covered, given what was read before, and
-/// the span to remember afterwards. Older hours are read once. Recent ones are read
-/// again from `settle` behind the newest read, at most once per `every`.
+/// the span to remember afterwards. Hours never read are always read. Older hours are
+/// read once, and recent ones again from `settle` behind the newest read, at most once
+/// per `every`.
 pub fn plan_reads(
     have: Option<(i64, i64)>,
     want: (i64, i64),
@@ -690,12 +701,12 @@ pub fn plan_reads(
         reads.push((want.0, from));
     }
     let recent = through - pace.settle;
-    let mut new_through = through;
     if want.1 > recent && age >= pace.every {
         reads.push((recent, want.1));
-        new_through = through.max(want.1);
+    } else if want.1 > through {
+        reads.push((through, want.1));
     }
-    (reads, (from.min(want.0), new_through))
+    (reads, (from.min(want.0), through.max(want.1)))
 }
 
 fn parse_span(value: &str) -> Option<(i64, i64)> {
@@ -914,12 +925,12 @@ impl Weather {
     /// result and its cached rows still answer.
     pub async fn refresh_feeds(&self, window: Window, force: bool) -> Vec<FeedStatus> {
         let states = self.region_states();
-        let by_state = |feed: &'static str| {
-            states.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{feed} is read by state, and the station list naming them has not been read"
-                )
-            })
+        let by_state = |feed: &'static str| match &states {
+            Ok(Some(states)) => Ok(states.as_slice()),
+            Ok(None) => Err(anyhow::anyhow!(
+                "{feed} is read by state, and the station list naming them has not been read"
+            )),
+            Err(e) => Err(anyhow::anyhow!("{feed}: {e:#}")),
         };
         let (cocorahs, usgs, asos) = tokio::join!(
             self.read_feed("CoCoRaHS", window, &DAILY, force, |span| async move {
@@ -935,18 +946,15 @@ impl Weather {
 
     /// The US states the region touches, from the archive's station list, or `None`
     /// before that list has been read.
-    fn region_states(&self) -> Option<Vec<String>> {
-        let (value, _) = self
-            .store()
-            .meta(&crate::ghcn::states_key(self.region()))
-            .ok()??;
-        Some(
+    fn region_states(&self) -> Result<Option<Vec<String>>> {
+        let meta = self.store().meta(&crate::ghcn::states_key(self.region()))?;
+        Ok(meta.map(|(value, _)| {
             value
                 .split(',')
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .collect(),
-        )
+                .collect()
+        }))
     }
 
     async fn read_feed<F, Fut>(
@@ -968,7 +976,9 @@ impl Weather {
             let now = now_secs();
             let want = (
                 window.start.as_second().max(now - pace.reach),
-                window.end.as_second().min(now),
+                // Whole hours, so a window ending in the future does not count as new
+                // hours on every call.
+                window.end.as_second().min(now).div_euclid(HOUR) * HOUR,
             );
             if want.0 >= want.1 {
                 return anyhow::Ok(None);
@@ -987,13 +997,34 @@ impl Weather {
                 _ => i64::MAX,
             };
             let (reads, span) = plan_reads(have, want, age, pace);
-            for r in &reads {
-                if let Err(e) = read(*r).await {
-                    tracing::warn!(feed = name, error = %e, "gauge feed failed");
-                    let message = format!("{e:#}");
-                    store.set_meta(&failed_key, &message)?;
-                    return Ok(Some(message));
+            let started = std::time::Instant::now();
+            let reading = async {
+                for r in &reads {
+                    read(*r).await?;
                 }
+                anyhow::Ok(())
+            };
+            // The span is only recorded after a whole read, and writes replace rows, so
+            // a read cut off here is safe to repeat.
+            let outcome = tokio::time::timeout(self.cfg.feed_deadline, reading)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(anyhow::anyhow!(
+                        "no complete answer in {} s",
+                        self.cfg.feed_deadline.as_secs()
+                    ))
+                });
+            tracing::debug!(
+                feed = name,
+                reads = reads.len(),
+                secs = started.elapsed().as_secs_f32(),
+                "gauge feed read"
+            );
+            if let Err(e) = outcome {
+                tracing::warn!(feed = name, error = %e, "gauge feed failed");
+                let message = format!("{e:#}");
+                store.set_meta(&failed_key, &message)?;
+                return Ok(Some(message));
             }
             if !reads.is_empty() {
                 store.set_meta(&key, &format!("{},{}", span.0, span.1))?;

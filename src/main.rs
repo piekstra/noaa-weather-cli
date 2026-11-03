@@ -1118,8 +1118,8 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
     );
     for feed in &rep.feeds {
         if let Some(error) = &feed.error {
-            println!(
-                "  {} could not be read, so its gauges may be behind: {error}",
+            eprintln!(
+                "{} could not be read, so its gauges may be behind: {error}",
                 feed.name
             );
         }
@@ -1178,7 +1178,8 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
     println!();
     println!("  A daily gauge counts only reports whose whole 24 h is inside the window, and");
     println!("  an hourly gauge its longest unbroken stretch. MRMS is summed over exactly");
-    println!("  those hours at the gauge's 1 km cell.");
+    println!("  those hours at the gauge's 1 km cell. In the reports column, d counts days");
+    println!("  and h counts hours.");
     if rows.iter().any(|g| g.provisional) {
         println!("  * Provisional: read from the network directly, not yet through the archive.");
     }
