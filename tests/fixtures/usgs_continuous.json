@@ -1,0 +1,11 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "id": "a", "geometry": null, "properties": {"monitoring_location_id": "USGS-09999001", "time_series_id": "aaaa", "time": "2026-01-15T14:15:00+00:00", "value": "0.01"}},
+    {"type": "Feature", "id": "b", "geometry": null, "properties": {"monitoring_location_id": "USGS-09999001", "time_series_id": "aaaa", "time": "2026-01-15T14:30:00+00:00", "value": null}}
+  ],
+  "links": [
+    {"rel": "self", "href": "https://example.test/ogcapi/v0/collections/continuous/items?limit=2"},
+    {"rel": "next", "href": "https://example.test/ogcapi/v0/collections/continuous/items?cursor=abc&limit=2"}
+  ]
+}

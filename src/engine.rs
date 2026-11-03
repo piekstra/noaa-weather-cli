@@ -27,6 +27,7 @@ use futures::stream::{self, StreamExt};
 use jiff::{tz::TimeZone, Timestamp};
 use serde::Serialize;
 
+use crate::feeds::{FeedClient, DEFAULT_COCORAHS_URL, DEFAULT_IEM_URL, DEFAULT_USGS_URL};
 use crate::ghcn::{GhcnClient, DEFAULT_GHCN_URL};
 use crate::grid::{Grid, Region};
 use crate::mrms::{MrmsClient, Pass, Product, DEFAULT_BUCKET_URL, PASS2_BLOCKS};
@@ -55,6 +56,12 @@ pub struct Config {
     pub bucket_url: String,
     /// GHCN-Daily bucket, for gauge reports.
     pub ghcn_url: String,
+    /// USGS Water Data API, for same-day gauges.
+    pub usgs_url: String,
+    /// CoCoRaHS data site, for same-day gauges.
+    pub cocorahs_url: String,
+    /// Iowa Environmental Mesonet, for same-day gauges.
+    pub iem_url: String,
     /// Simultaneous downloads.
     pub concurrency: usize,
     pub max_hours: i64,
@@ -72,6 +79,9 @@ impl Config {
             tz: TimeZone::system(),
             bucket_url: DEFAULT_BUCKET_URL.into(),
             ghcn_url: DEFAULT_GHCN_URL.into(),
+            usgs_url: DEFAULT_USGS_URL.into(),
+            cocorahs_url: DEFAULT_COCORAHS_URL.into(),
+            iem_url: DEFAULT_IEM_URL.into(),
             concurrency: 6,
             max_hours: DEFAULT_MAX_HOURS,
             retain_days: Some(DEFAULT_RETAIN_DAYS),
@@ -176,6 +186,7 @@ pub struct Weather {
     store: Store,
     client: MrmsClient,
     ghcn: GhcnClient,
+    feeds: FeedClient,
     availability: Mutex<Option<(Instant, Availability)>>,
     latest_quarter: Mutex<Option<(Instant, Timestamp)>>,
 }
@@ -198,11 +209,13 @@ impl Weather {
     pub fn new(cfg: Config, store: Store) -> Result<Self> {
         let client = MrmsClient::new(&cfg.bucket_url, cfg.concurrency)?;
         let ghcn = GhcnClient::new(&cfg.ghcn_url)?;
+        let feeds = FeedClient::new(&cfg.usgs_url, &cfg.cocorahs_url, &cfg.iem_url)?;
         Ok(Self {
             cfg,
             store,
             client,
             ghcn,
+            feeds,
             availability: Mutex::new(None),
             latest_quarter: Mutex::new(None),
         })
@@ -210,6 +223,10 @@ impl Weather {
 
     pub(crate) fn ghcn(&self) -> &GhcnClient {
         &self.ghcn
+    }
+
+    pub(crate) fn feeds(&self) -> &FeedClient {
+        &self.feeds
     }
 
     pub fn store(&self) -> &Store {

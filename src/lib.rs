@@ -21,6 +21,7 @@
 pub struct UpstreamError(pub String);
 
 pub mod engine;
+pub mod feeds;
 pub mod ghcn;
 pub mod grib2;
 pub mod grid;
