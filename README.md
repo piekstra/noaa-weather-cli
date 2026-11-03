@@ -89,8 +89,8 @@ Diagnostics go to stderr. `wx info --json` lists capabilities.
 | Code | Meaning |
 |---|---|
 | 0 | ok |
-| 2 | bad usage, including an area too large |
-| 4 | not found, such as a window with no data yet or a point with no NWS forecast |
+| 2 | bad usage, including points too far apart to share one grid |
+| 4 | not found, such as a window with no data yet, an area outside MRMS coverage, or a point with no NWS forecast |
 | 5 | upstream failure from NOAA or NWS |
 
 ## As a library
