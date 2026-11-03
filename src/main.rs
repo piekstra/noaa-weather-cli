@@ -14,6 +14,7 @@
 //! wx conditions --at cabin         current observations from the nearest station
 //! wx places add cabin 39.74,-104.99
 //! wx backfill --days 7             pre-fill the hourly cache
+//! wx mcp                           read-only tools for Claude and other MCP clients
 //! ```
 //!
 //! WINDOW is the grammar in `noaa_weather::window`: `45m`, `6h`, `3d`, `2w`,
@@ -38,8 +39,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use noaa_weather::engine::{Accumulation, Availability, Progress, SeriesPoint};
 use noaa_weather::grid::{mm_to_in, GridError, Region, MAX_AREA_CELLS, MISSING};
+use noaa_weather::mcp::{Live, Settings, WxTools};
 use noaa_weather::nws::{self, AlertQuery, NwsClient};
-use noaa_weather::places::{default_config_path, Place, UserConfig};
+use noaa_weather::places::{self, default_config_path, Place, UserConfig};
 use noaa_weather::render::{self, RenderOpts, Rows, Style};
 use noaa_weather::window::{local_label, region_tz, Resolved, WindowError};
 use noaa_weather::{ghcn, mrms, ramp, Config, Store, Weather, WindowSpec, MRMS_DOMAIN};
@@ -206,6 +208,9 @@ enum Cmd {
         /// Path such as /alerts/types.
         path: String,
     },
+    /// Serve read-only tools to Claude and other MCP clients over stdio, or
+    /// with --http on 127.0.0.1 for your own connector's tunnel.
+    Mcp(pk_cli_mcp::McpArgs),
     /// Machine-readable capability discovery (cli-info/v1).
     Info,
     /// Report credential state. This tool needs none.
@@ -294,7 +299,7 @@ struct Ctx {
 impl Ctx {
     /// Bad flags and bad config fail here, before any network or cache use.
     fn new(cli: &Cli) -> Result<Self> {
-        let config_path = cli.config.clone().unwrap_or_else(default_config_path);
+        let config_path = cli.config.clone().map_or_else(default_config_path, Ok)?;
         let user = UserConfig::load(&config_path)?;
         let region = cli.region.clone().or_else(|| user.region.clone());
         let region_flag = region.map(|r| Region::parse(&r)).transpose()?;
@@ -413,7 +418,9 @@ fn to_cli_error(e: &anyhow::Error) -> CliError {
     if e.downcast_ref::<GridError>().is_some() {
         return CliError::Usage(e.to_string());
     }
-    if e.downcast_ref::<nws::NoForecast>().is_some() {
+    if e.downcast_ref::<nws::NoForecast>().is_some()
+        || e.downcast_ref::<nws::NoObservation>().is_some()
+    {
         return CliError::NotFound(e.to_string());
     }
     let upstream = e.chain().any(|c| {
@@ -433,8 +440,7 @@ fn is_broken_pipe(e: &anyhow::Error) -> bool {
     })
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     let filter = if cli.common.verbose {
         "noaa_weather=debug"
@@ -447,7 +453,7 @@ async fn main() -> ExitCode {
         .init();
 
     let json = cli.common.json;
-    match run(cli).await {
+    match dispatch(cli) {
         Ok(()) => ExitCode::SUCCESS,
         // `wx grid | head` closing the pipe early is not an error.
         Err(e) if is_broken_pipe(&e) => ExitCode::SUCCESS,
@@ -458,9 +464,30 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
-    // These need no settings, so a broken config cannot lock anyone out of them.
+/// `mcp` starts its own runtime, and `self-update` blocks on HTTP, and neither may do so
+/// inside another runtime. These two and the next three need no settings either, so a
+/// broken config cannot lock anyone out of them.
+fn dispatch(cli: Cli) -> Result<()> {
     match &cli.cmd {
+        Cmd::Mcp(args) => {
+            let settings = Settings {
+                config_path: cli.config.clone().map_or_else(default_config_path, Ok)?,
+                db: cli.db.clone(),
+                region: cli.region.clone(),
+                tz: cli.tz.clone(),
+                concurrency: cli.concurrency,
+                nws_url: nws::DEFAULT_NWS_URL.into(),
+            };
+            return Ok(pk_cli_mcp::run(args, WxTools::new(Live::new(settings)))?);
+        }
+        Cmd::SelfUpdate(args) => {
+            return Ok(updater().run_noting(
+                args,
+                cli.common.json,
+                cli.common.quiet,
+                &pk_cli_mcp::restart_note(BIN),
+            )?);
+        }
         Cmd::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(*shell, &mut cmd, BIN, &mut std::io::stdout());
@@ -468,12 +495,16 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Info => return info(),
         Cmd::Auth(AuthCmd::Status) => return auth_status(cli.common.json),
-        Cmd::SelfUpdate(args) => {
-            return Ok(updater().run(args, cli.common.json, cli.common.quiet)?);
-        }
         _ => {}
     }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?
+        .block_on(run(cli))
+}
 
+async fn run(cli: Cli) -> Result<()> {
     let ctx = Ctx::new(&cli)?;
     match cli.cmd {
         // What NOAA has published does not depend on any one area.
@@ -570,8 +601,8 @@ async fn run(cli: Cli) -> Result<()> {
                 None => Err(CliError::NotFound(path).into()),
             }
         }
-        Cmd::Completions { .. } | Cmd::Info | Cmd::Auth(_) | Cmd::SelfUpdate(_) => {
-            unreachable!("handled above")
+        Cmd::Mcp(_) | Cmd::SelfUpdate(_) | Cmd::Completions { .. } | Cmd::Info | Cmd::Auth(_) => {
+            unreachable!("handled in dispatch")
         }
     }
 }
@@ -579,7 +610,8 @@ async fn run(cli: Cli) -> Result<()> {
 fn updater() -> Updater {
     Updater {
         repo: REPO.into(),
-        binary: BIN.into(),
+        // The name inside the release archive, which on Windows is `wx.exe`.
+        binary: format!("{BIN}{}", std::env::consts::EXE_SUFFIX),
         target: env!("BUILD_TARGET").into(),
         current: env!("CARGO_PKG_VERSION").into(),
     }
@@ -607,6 +639,7 @@ fn info() -> Result<()> {
             "conditions",
             "places",
             "api",
+            "mcp",
         ],
     );
     output::json(&serde_json::to_value(&info)?);
@@ -627,17 +660,7 @@ fn emit<T: Serialize>(schema: &str, v: &T) -> Result<()> {
 // ------------------------------------------------------------------ helpers
 
 fn parse_point(s: &str) -> Result<(f64, f64)> {
-    let usage = || CliError::Usage(format!("{s:?}: expected lat,lon or a saved place name"));
-    let (a, b) = s.split_once(',').ok_or_else(usage)?;
-    let lat: f64 = a.trim().parse().map_err(|_| usage())?;
-    let lon: f64 = b.trim().parse().map_err(|_| usage())?;
-    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
-        return Err(CliError::Usage(format!(
-            "{s:?}: out of range (expected lat,lon — latitude first)"
-        ))
-        .into());
-    }
-    Ok((lat, lon))
+    places::parse_point(s).map_err(|message| CliError::Usage(message).into())
 }
 
 /// `0.42" (10.7 mm)`

@@ -1,0 +1,77 @@
+{
+  "manifest_version": "0.3",
+  "name": "wx",
+  "display_name": "NOAA and NWS weather (wx)",
+  "version": "0.4.0",
+  "description": "Rainfall, forecasts, current conditions and alerts from NOAA and National Weather Service public data, through the open-source wx CLI.",
+  "long_description": "Ask Claude how much rain fell at a place and when, what the forecast says, what the weather is doing now, and which alerts are in effect. Four read-only tools: wx_rain, wx_forecast, wx_conditions and wx_alerts. Everything comes from public data, so the extension asks for no account, key or password and touches no keychain. Pass any point as lat,lon. To ask about a place by name, install the wx CLI and run `wx places add <name> <lat,lon>` in a terminal: the extension reads the same config file, unless you moved it with XDG_CONFIG_HOME in your shell. A saved place's coordinates go only to the National Weather Service and the grid downloads a question needs, and no result repeats them, but a forecast's nearest town and a station's name and distance say roughly where it is, and those reach Claude as part of your conversation. Rainfall answers cache downloaded grids in your user cache folder. Rainfall covers the contiguous US and the edges of its neighbors; forecasts, conditions and alerts also reach Alaska, Hawaii and nearby waters. Unofficial; not affiliated with or endorsed by NOAA or the National Weather Service.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/noaa-weather-cli"
+  },
+  "homepage": "https://github.com/piekstra/noaa-weather-cli",
+  "documentation": "https://github.com/piekstra/noaa-weather-cli#use-with-claude",
+  "support": "https://github.com/piekstra/noaa-weather-cli/issues",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "weather",
+    "rainfall",
+    "forecast",
+    "noaa",
+    "read-only"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/wx",
+    "mcp_config": {
+      "command": "${__dirname}/server/wx",
+      "args": [
+        "mcp"
+      ],
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/wx.exe",
+          "args": [
+            "mcp"
+          ]
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux/wx",
+          "args": [
+            "mcp"
+          ]
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "wx_rain",
+      "description": "How much rain fell at one place over a window, and optionally when, from NOAA's 1 km grid."
+    },
+    {
+      "name": "wx_forecast",
+      "description": "The National Weather Service forecast for one place, by period or by hour."
+    },
+    {
+      "name": "wx_conditions",
+      "description": "The latest observation from the nearest station with a fresh one."
+    },
+    {
+      "name": "wx_alerts",
+      "description": "Active National Weather Service alerts for a place or a state or marine area."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

@@ -8,10 +8,13 @@ A Rust CLI (`wx`) and library (`noaa_weather`) over NOAA and NWS raw data: MRMS
 rainfall and radar grids on AWS, GHCN-Daily gauges on AWS, `api.weather.gov` for
 alerts, forecasts and observations, and same-day gauges from CoCoRaHS, USGS and the
 Iowa Environmental Mesonet. It conforms to the family spec
-`piekstra-cli/1` from [cli-common](https://github.com/piekstra/cli-common).
+`piekstra-cli/1` from [cli-common](https://github.com/piekstra/cli-common), pinned to
+**v0.25.0**.
 
-Everything is anonymous public data: no credentials, no keychain, no `auth login`.
-`auth status` exists because the spec requires it and reports `required: false`.
+Everything is anonymous public data: no credentials and no `auth login`. `auth status`
+exists because the spec requires it and reports `required: false`. The only keychain item is
+the bearer token of `mcp --http`, written by `mcp --new-token`, so there is no `auth logout`;
+`SECURITY.md` says how to revoke it.
 
 ## Build and test
 
@@ -42,6 +45,7 @@ you downloaded; see the test for the variable it reads.
 | `src/ramp.rs` | The color scales and their validator results. |
 | `src/render.rs` | PNG rendering. |
 | `src/places.rs` | The config file: named places and settings. |
+| `src/mcp.rs` | `wx mcp`: the MCP tools, behind the `cli` feature. |
 | `docs/api.md` | Every endpoint and its traps. Read before touching a client. |
 
 ## Rules
@@ -58,6 +62,9 @@ you downloaded; see the test for the variable it reads.
   drop them from a DTO or a human view.
 - **A silently misread grid is the worst failure here.** `grib2.rs` rejects what
   it does not understand rather than decoding it approximately.
+- **A saved place's coordinates stay out of tool results and errors.** `src/mcp.rs` maps
+  every library error to its own text, naming the place as the caller did. See its module
+  docs before adding a tool or returning a library message.
 - **Be polite upstream.** Downloads go through the concurrency limit. The
   User-Agent names the repository, and nothing about the person running it.
 
@@ -65,7 +72,16 @@ you downloaded; see the test for the variable it reads.
 
 `--json` prints exactly one document, tagged `<name>/v1`. Pass bare names to
 `output::tagged` and `emit_one`; they append `/v1` themselves. Exit codes: 0 ok,
-2 usage, 4 not found, 5 upstream.
+2 usage, 3 `mcp --http` without a bearer token, 4 not found (including no recent
+station observation), 5 upstream.
+
+## Shipping
+
+To release: bump `version` in `Cargo.toml` and `packaging/mcpb/manifest.json`, and the tag in
+README's library example, add to `CHANGELOG.md`, merge, and push a `v<version>` tag. The
+workflow builds `wx-<target>.tar.gz` assets that `self-update` can find and the `.mcpb`, and
+publishes the release once all of them are there. A pull request that touches the
+dependencies or the packaging runs the same builds as a dry run.
 
 ## Update trigger
 

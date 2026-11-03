@@ -26,6 +26,31 @@ fn wx() -> (Command, tempfile::TempDir) {
     (cmd, dir)
 }
 
+/// `~` is the home directory, not a temp directory, and `XDG_CONFIG_HOME` moves it.
+#[cfg(unix)]
+#[test]
+fn config_path_follows_home_and_xdg() {
+    let (mut cmd, dir) = wx();
+    let home = dir.path().join("home");
+    let out = cmd
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOME", &home)
+        .args(["config", "path"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        home.join(".config/wx/config.json").to_str().unwrap()
+    );
+
+    let (mut cmd, dir) = wx();
+    let out = cmd.args(["config", "path"]).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        dir.path().join("config/wx/config.json").to_str().unwrap()
+    );
+}
+
 fn json_of(out: &[u8]) -> Value {
     serde_json::from_slice(out).expect("one JSON document on stdout")
 }
@@ -60,6 +85,7 @@ fn every_command_has_help() {
         vec!["backfill", "--help"],
         vec!["api", "--help"],
         vec!["info", "--help"],
+        vec!["mcp", "--help"],
         vec!["auth", "status", "--help"],
         vec!["config", "set", "--help"],
         vec!["self-update", "--help"],

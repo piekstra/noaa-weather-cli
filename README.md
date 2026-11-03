@@ -79,12 +79,75 @@ always reported back.
 `--at` points, or around your saved places, unless `--region
 west,south,east,north` says otherwise. Commands that draw or list a whole area,
 `map` and `gauges`, use your saved places or `--region`. Places live in
-`${XDG_CONFIG_HOME:-~/.config}/wx/config.json`; `wx config path` prints the file.
+`${XDG_CONFIG_HOME:-~/.config}/wx/config.json`; `wx config path` prints the file. On
+Windows `~` is `%USERPROFILE%`. Claude Desktop and launchd do not start from your shell, so
+they do not see an `XDG_CONFIG_HOME` set in a shell profile and read `~/.config`.
 
 Downloaded grids are cached in SQLite under your cache directory, so a repeated
 question downloads nothing. A grid is dropped 92 days after it was downloaded, and the
 file stops growing because SQLite reuses the space. `wx config set retain_days N`
 changes the limit, and 0 keeps everything.
+
+## Use with Claude
+
+`wx mcp` serves four read-only tools to Claude over MCP: `wx_rain`, `wx_forecast`,
+`wx_conditions` and `wx_alerts`. They read the same public data the commands do, with no
+account or key. Maps, raw grids, gauges and radar frames stay on the command line.
+
+Each tool takes `at`, a saved place's name or `lat,lon`, except that `wx_alerts` can take
+a state or marine `area` instead. `wx_rain` takes a `window` in the grammar above, and
+`step` (`1h` or `15m`) to add a bar per step. A total keeps its passes, and says when it can
+still change.
+
+**Claude Code.** Add the `noaa-weather-cli` plugin from the
+[piekstra plugin marketplace](https://github.com/piekstra/claude-plugins):
+
+```console
+$ claude plugin marketplace add piekstra/claude-plugins
+$ claude plugin install noaa-weather-cli@piekstra-plugins
+```
+
+or register the server yourself:
+
+```console
+$ claude mcp add wx -- wx mcp
+```
+
+**Claude Desktop.** Download `wx-<version>.mcpb` from the
+[latest release](https://github.com/piekstra/noaa-weather-cli/releases/latest) and open it.
+It asks for nothing and touches no keychain. To ask about places by name, install `wx` too
+and run `wx places add`: the extension reads the same config file.
+
+Any other MCP client that launches a local server can run `wx mcp`.
+
+**Claude on the web and mobile.** claude.ai reaches tools through a remote connector. `wx`
+keeps its cache and your saved places on your computer, so it serves the same tools from
+your computer to a connector you deploy into your own Cloudflare account:
+
+```console
+$ wx mcp --new-token            # once: a bearer token, saved in the keychain and printed for the Worker
+$ wx mcp --http --port 8770     # serve on 127.0.0.1 only
+```
+
+`--http` takes the token from `$WX_MCP_TOKEN` if it is set, and otherwise from the keychain.
+The connector, [cli-common's `connector/`](https://github.com/piekstra/cli-common/tree/main/connector#tools-from-your-computer-home-modules),
+reaches that port through a Cloudflare Tunnel in your account; its README walks through the
+tunnel, the VPC service, a launchd agent that keeps the server running, and the
+`HOME_WX_TOKEN` secret, with the threat model. `--http` binds 127.0.0.1 only, refuses to
+start without the token, refuses any request whose `Host` is not loopback or that carries an
+`Origin`, and serves only read-only tools, which is all `wx` has. Tool results pass through
+Cloudflare and reach Claude ([`SECURITY.md`](SECURITY.md)). While the computer sleeps, the
+tools answer that it is offline.
+
+After `wx self-update`, restart the server: a running one keeps the old code, and its
+launchd agent restarts it only when it exits. Its start line names the version.
+
+```console
+$ launchctl kickstart -k gui/$(id -u)/com.piekstra.wx-mcp-http
+```
+
+`self-update` does not reach a Claude Desktop extension, which runs its own copy. Install
+the new release's `.mcpb` too.
 
 ## Output and exit codes
 
@@ -97,7 +160,8 @@ for an hourly one. `mrms_hours` gives the MRMS passes behind `mrms_mm`.
 |---|---|
 | 0 | ok |
 | 2 | bad usage, including points too far apart to share one grid |
-| 4 | not found, such as a window with no data yet, an area outside MRMS coverage, or a point with no NWS forecast |
+| 3 | `mcp --http` without a bearer token |
+| 4 | not found, such as a window with no data yet, an area outside MRMS coverage, a point with no NWS forecast, or no nearby station with a recent observation |
 | 5 | upstream failure from NOAA or NWS |
 
 ## As a library
@@ -106,7 +170,7 @@ The crate is also the library `noaa_weather`. A program embedding it skips the
 CLI's dependencies:
 
 ```toml
-noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.3.0", default-features = false }
+noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.4.0", default-features = false }
 ```
 
 ## Data

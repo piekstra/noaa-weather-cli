@@ -169,6 +169,17 @@ Traps:
 - **Observations are SI and forecasts are °F.** Values carry a `unitCode`, and any
   of them may be null.
 
+## MCP tools
+
+`wx mcp` reads through the clients above. Traps specific to serving a model:
+
+- **The library's messages say where.** A failed request's context names its URL, and
+  `/points` URLs hold the coordinates, so `src/mcp.rs` never repeats one.
+- **`/alerts/active` answers a point outside NWS coverage with a 400.** The tools report it
+  as not found rather than as an outage.
+- **`area` goes into a URL as given.** The tool holds it to two letters. The command does not,
+  since the person typing it owns the request.
+
 ## Coverage gaps
 
 - South Florida Water Management District gauges are not read: the service could not

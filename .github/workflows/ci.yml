@@ -47,6 +47,7 @@ jobs:
           ./target/release/wx --version
           ./target/release/wx --help > /dev/null
           ./target/release/wx info > /dev/null
+          ./target/release/wx mcp --list-tools > /dev/null
 
   security:
     name: audit / deny / secrets

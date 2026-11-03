@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use futures::StreamExt;
 use jiff::Timestamp;
 use serde::Serialize;
@@ -40,6 +40,15 @@ pub const ATTRIBUTION: &str = "Alerts, forecasts and observations: National Weat
 #[derive(Debug, thiserror::Error)]
 #[error("NWS has no forecast for {lat:.4}, {lon:.4}: US land and nearby waters only")]
 pub struct NoForecast {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Every station near a point was tried and none has a fresh observation.
+#[derive(Debug, thiserror::Error)]
+#[error("none of the {stations} stations nearest {lat:.4}, {lon:.4} has a recent observation")]
+pub struct NoObservation {
+    pub stations: usize,
     pub lat: f64,
     pub lon: f64,
 }
@@ -208,7 +217,7 @@ impl NwsClient {
     async fn get_required(&self, url: &str) -> Result<Value> {
         self.get(url)
             .await?
-            .with_context(|| format!("GET {url}: not found"))
+            .ok_or_else(|| UpstreamError(format!("GET {url}: not found")).into())
     }
 
     /// Raw GET against the API, for fields this crate does not model.
@@ -282,11 +291,22 @@ impl NwsClient {
             .await?;
         let stations = parse_stations(&list);
         let now = Timestamp::now();
+        let mut answered = false;
+        let mut failure = None;
         for s in &stations {
             let url = format!("{}/stations/{}/observations/latest", self.base, s.id);
-            let Ok(Some(v)) = self.get(&url).await else {
-                continue;
+            let v = match self.get(&url).await {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    answered = true;
+                    continue;
+                }
+                Err(e) => {
+                    failure = Some(e);
+                    continue;
+                }
             };
+            answered = true;
             let Some(c) = parse_observation(&v, s, lat, lon) else {
                 continue;
             };
@@ -298,10 +318,17 @@ impl NwsClient {
                 return Ok(c);
             }
         }
-        bail!(
-            "none of the {} stations nearest {lat:.4}, {lon:.4} has a recent observation",
-            stations.len()
-        )
+        // "Nothing recent" is a fact only if a station said so. If none could answer, the
+        // service failed, and that says nothing about the place.
+        if let (false, Some(e)) = (answered, failure) {
+            return Err(e);
+        }
+        Err(NoObservation {
+            stations: stations.len(),
+            lat,
+            lon,
+        }
+        .into())
     }
 
     pub async fn alerts(&self, q: &AlertQuery) -> Result<Vec<Alert>> {

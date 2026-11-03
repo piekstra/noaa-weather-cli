@@ -37,14 +37,33 @@ pub struct UserConfig {
     pub places: Vec<Place>,
 }
 
+/// `lat,lon`, latitude first. The error says what was wrong with it, for a usage error.
+pub fn parse_point(s: &str) -> std::result::Result<(f64, f64), String> {
+    let usage = || format!("{s:?}: expected lat,lon or a saved place name");
+    let (a, b) = s.split_once(',').ok_or_else(usage)?;
+    let lat: f64 = a.trim().parse().map_err(|_| usage())?;
+    let lon: f64 = b.trim().parse().map_err(|_| usage())?;
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err(format!(
+            "{s:?}: out of range (expected lat,lon, latitude first)"
+        ));
+    }
+    Ok((lat, lon))
+}
+
 /// `${XDG_CONFIG_HOME:-~/.config}/wx/config.json`.
-pub fn default_config_path() -> PathBuf {
+///
+/// With no home directory this is an error and not a temp directory: saved places cannot
+/// be fetched again. `~` is `HOME`, and on Windows `USERPROFILE`, whatever shell started `wx`.
+pub fn default_config_path() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("wx").join("config.json")
+        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no home directory for the config: set XDG_CONFIG_HOME or use --config")
+        })?;
+    Ok(base.join("wx").join("config.json"))
 }
 
 impl UserConfig {
