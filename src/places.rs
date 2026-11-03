@@ -37,6 +37,20 @@ pub struct UserConfig {
     pub places: Vec<Place>,
 }
 
+/// `lat,lon`, latitude first. The error says what was wrong with it, for a usage error.
+pub fn parse_point(s: &str) -> std::result::Result<(f64, f64), String> {
+    let usage = || format!("{s:?}: expected lat,lon or a saved place name");
+    let (a, b) = s.split_once(',').ok_or_else(usage)?;
+    let lat: f64 = a.trim().parse().map_err(|_| usage())?;
+    let lon: f64 = b.trim().parse().map_err(|_| usage())?;
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err(format!(
+            "{s:?}: out of range (expected lat,lon, latitude first)"
+        ));
+    }
+    Ok((lat, lon))
+}
+
 /// `${XDG_CONFIG_HOME:-~/.config}/wx/config.json`.
 pub fn default_config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")

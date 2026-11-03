@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use futures::StreamExt;
 use jiff::Timestamp;
 use serde::Serialize;
@@ -40,6 +40,15 @@ pub const ATTRIBUTION: &str = "Alerts, forecasts and observations: National Weat
 #[derive(Debug, thiserror::Error)]
 #[error("NWS has no forecast for {lat:.4}, {lon:.4}: US land and nearby waters only")]
 pub struct NoForecast {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Every station near a point was tried and none has a fresh observation.
+#[derive(Debug, thiserror::Error)]
+#[error("none of the {stations} stations nearest {lat:.4}, {lon:.4} has a recent observation")]
+pub struct NoObservation {
+    pub stations: usize,
     pub lat: f64,
     pub lon: f64,
 }
@@ -298,10 +307,12 @@ impl NwsClient {
                 return Ok(c);
             }
         }
-        bail!(
-            "none of the {} stations nearest {lat:.4}, {lon:.4} has a recent observation",
-            stations.len()
-        )
+        Err(NoObservation {
+            stations: stations.len(),
+            lat,
+            lon,
+        }
+        .into())
     }
 
     pub async fn alerts(&self, q: &AlertQuery) -> Result<Vec<Alert>> {

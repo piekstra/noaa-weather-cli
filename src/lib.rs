@@ -25,6 +25,8 @@ pub mod feeds;
 pub mod ghcn;
 pub mod grib2;
 pub mod grid;
+#[cfg(feature = "cli")]
+pub mod mcp;
 pub mod mrms;
 pub mod nws;
 pub mod places;

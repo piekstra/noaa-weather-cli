@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-104.5, 39.5] },
+      "properties": { "stationIdentifier": "KXYZ", "name": "Example Airport" }
+    }
+  ]
+}

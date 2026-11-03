@@ -60,6 +60,7 @@ fn every_command_has_help() {
         vec!["backfill", "--help"],
         vec!["api", "--help"],
         vec!["info", "--help"],
+        vec!["mcp", "--help"],
         vec!["auth", "status", "--help"],
         vec!["config", "set", "--help"],
         vec!["self-update", "--help"],
