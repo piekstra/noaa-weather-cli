@@ -853,7 +853,7 @@ mod tests {
         };
         let run = |tenths, pass2, pass1, missing| {
             let grid = Grid {
-                geom: geom.clone(),
+                geom,
                 tenths: vec![tenths],
             };
             let hours = HourCounts {
