@@ -3,7 +3,9 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pk_cli_mcp::conformance::{assert_conforms, assert_fits, call};
 use pk_cli_mcp::{tools_list_json, CallToolResult};
@@ -652,6 +654,96 @@ fn a_failure_upstream_says_what_to_do_and_nothing_of_the_place() {
     let text = error_text(&call(&t, ALERTS_TOOL, json!({"at": "Example Beach"})));
     assert!(text.starts_with("not_found:"), "{text}");
     assert_no_coordinates(&text);
+}
+
+#[test]
+fn a_refusal_upstream_is_upstream_and_does_not_blame_the_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, _) = stub(|_| (403, String::new()));
+    let t = live(dir.path(), &url);
+    let text = error_text(&call(&t, FORECAST_TOOL, json!({"at": "Example Beach"})));
+    assert!(text.starts_with("upstream:"), "{text}");
+    assert!(text.contains("HTTP 403"), "{text}");
+    assert!(!text.contains("Check the place"), "{text}");
+    assert_no_coordinates(&text);
+
+    // A 400 says something about the place only for a point.
+    let (url, _) = stub(|_| (400, String::new()));
+    let t = live(dir.path(), &url);
+    let text = error_text(&call(&t, ALERTS_TOOL, json!({"area": "FL"})));
+    assert!(text.starts_with("upstream:"), "{text}");
+}
+
+#[test]
+fn a_required_nws_call_that_finds_nothing_is_upstream_and_not_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cell: Arc<Mutex<String>> = Arc::default();
+    let shared = cell.clone();
+    let (url, _) = stub(move |path| {
+        if path.contains("/stations?") {
+            return (404, String::new());
+        }
+        let base = shared.lock().unwrap().clone();
+        nws_route(&base, path)
+    });
+    *cell.lock().unwrap() = url.clone();
+    let t = live(dir.path(), &url);
+    let text = error_text(&call(&t, CONDITIONS_TOOL, json!({"at": "Example Beach"})));
+    assert!(text.starts_with("upstream:"), "{text}");
+    assert!(!text.contains("cache"), "{text}");
+    assert_no_coordinates(&text);
+}
+
+fn live_source(dir: &Path) -> Live {
+    Live::new(Settings {
+        config_path: dir.join("config.json"),
+        db: Some(dir.join("cache.sqlite")),
+        region: None,
+        tz: Some("UTC".into()),
+        concurrency: 2,
+        nws_url: "http://127.0.0.1:9".into(),
+    })
+}
+
+#[test]
+fn a_rainfall_load_stops_at_its_limit_says_so_and_frees_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = live_source(dir.path());
+    source.load_limit = Duration::from_millis(50);
+
+    let e = source
+        .load(std::future::pending::<Result<()>>())
+        .unwrap_err();
+    let server = WxTools::new(live_source(dir.path())).server();
+    let text = tool_error(e, "Example Beach").render(&server);
+    assert!(text.starts_with("upstream:"), "{text}");
+    assert!(text.contains("Call again"), "{text}");
+
+    assert_eq!(source.load(async { Ok(7) }).unwrap(), 7);
+}
+
+#[test]
+fn rainfall_loads_run_one_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = live_source(dir.path());
+    let running = AtomicUsize::new(0);
+    let peak = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                source
+                    .load(async {
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        running.fetch_sub(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .unwrap();
+            });
+        }
+    });
+    assert_eq!(peak.load(Ordering::SeqCst), 1);
 }
 
 #[test]

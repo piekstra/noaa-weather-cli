@@ -16,8 +16,8 @@ What it writes to disk:
 
 | File | Holds |
 |---|---|
-| `${XDG_CONFIG_HOME:-~/.config}/wx/config.json` | Named places and non-secret settings |
-| A SQLite database in the user cache directory | Downloaded grids, gauge reports, zone shapes |
+| `${XDG_CONFIG_HOME:-~/.config}/wx/config.json` (on Windows, `~` is `%USERPROFILE%`) | Named places and non-secret settings. With no home directory, `wx` refuses rather than using a temp directory. |
+| `${XDG_CACHE_HOME:-~/.cache}/wx/weather.sqlite` | Downloaded grids, gauge reports, zone shapes |
 | OS keychain (`piekstra.wx`, `mcp-http-token`) | Only after `wx mcp --new-token`: the bearer token of `mcp --http` |
 
 Your named places can be sensitive, because they may be your home. They stay in
@@ -63,7 +63,8 @@ Every request must carry the token (compared in constant time) and a `Host` of `
 `localhost`, and must not carry an `Origin`; there are no CORS headers. A copy of that token
 lives in your Worker as its `HOME_WX_TOKEN` secret. The data is public, so a leaked token
 gives no account to anyone: it answers weather questions, can use your saved places by name,
-and can make your computer download grids.
+and can make your computer download grids, one rainfall load at a time and each for at most
+100 seconds.
 
 **Tool results also cross Cloudflare on this path**, through your tunnel and your Worker, on
 their way to Claude. Who holds what, and what a leaked token can do, is in the connector's

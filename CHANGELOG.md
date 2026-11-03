@@ -11,6 +11,9 @@ All notable changes to `wx` are documented here. Newest first. The project follo
   Cloudflare Worker and tunnel. No tool writes anything but the grid cache.
 - A tool takes a saved place by name and no result or error repeats its coordinates.
 - `wx conditions` exits 4 when no nearby station has a recent observation. It exited 1.
+- A 404 on an NWS call that must succeed, such as a station list, exits 5. It exited 1.
+- The config and cache follow `USERPROFILE` on Windows. With no home directory the config is
+  an error, not a file in a temp directory that a cleanup can remove.
 - Releases attach `wx-<version>.mcpb`, a Claude Desktop extension, and a Windows x86_64
   tarball, and publish only once every asset is there.
 - `self-update` says to restart a running `wx mcp --http` and to install the new `.mcpb`, and

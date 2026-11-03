@@ -38,7 +38,7 @@ pub fn default_db_path() -> std::path::PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".cache")))
         .unwrap_or_else(std::env::temp_dir);
     base.join("wx").join("weather.sqlite")
 }

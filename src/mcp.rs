@@ -23,10 +23,12 @@
 //! The config is read on each call, so `wx places add` needs no restart, and listing
 //! the tools reads nothing.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use jiff::{tz::TimeZone, Timestamp};
 use pk_cli_core::CliError;
 use pk_cli_mcp::{
@@ -108,28 +110,62 @@ pub trait Source {
     fn alerts(&self, query: &AlertQuery) -> Result<Vec<Alert>>;
 }
 
-/// The one runtime the library's futures run on. Never dropped: dropping a runtime
-/// where a server's shutdown may be in async code panics.
-fn runtime() -> std::io::Result<&'static tokio::runtime::Runtime> {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    if let Some(rt) = RUNTIME.get() {
-        return Ok(rt);
-    }
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
-    Ok(RUNTIME.get_or_init(|| rt))
+/// The one runtime the library's futures run on, built once and never dropped: dropping a
+/// runtime where calls run, or where a server's shutdown may be in async code, panics.
+fn runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| anyhow!("starting the runtime: {e}"))
 }
+
+/// How long one rainfall load may run. `mcp --http` answers a call at
+/// [`pk_cli_mcp::CALL_LIMIT`] and leaves it running, so a load stops itself first, rather
+/// than downloading to the end of a long window with nobody listening.
+const LOAD_LIMIT: Duration = Duration::from_secs(100);
+
+/// A rainfall load reached [`LOAD_LIMIT`]. What it downloaded is in the cache.
+#[derive(Debug, thiserror::Error)]
+#[error("a rainfall load ran out of time")]
+struct LoadTimedOut;
 
 /// The real source.
 pub struct Live {
     settings: Settings,
+    /// One rainfall load at a time. Each load builds its own client and its own download
+    /// limit, so a model that retries a slow call would otherwise fetch the same grids again
+    /// in parallel. A retry waits here, then finds them in the cache.
+    loading: tokio::sync::Mutex<()>,
+    load_limit: Duration,
 }
 
 impl Live {
     pub fn new(settings: Settings) -> Self {
-        Self { settings }
+        Self {
+            settings,
+            loading: tokio::sync::Mutex::new(()),
+            load_limit: LOAD_LIMIT,
+        }
+    }
+
+    /// Run one rainfall load, waiting for any other, and stop both the wait and the load at
+    /// the limit.
+    fn load<T>(&self, work: impl Future<Output = Result<T>>) -> Result<T> {
+        runtime()?.block_on(async {
+            tokio::time::timeout(self.load_limit, async {
+                let _one_at_a_time = self.loading.lock().await;
+                work.await
+            })
+            .await
+            .map_err(|_| anyhow::Error::new(LoadTimedOut))?
+        })
     }
 
     /// A configured region that holds the point, since its grids may be cached, or
@@ -205,7 +241,7 @@ impl Source for Live {
         spec: &WindowSpec,
     ) -> Result<RainReading> {
         let wx = self.weather(setup, (lat, lon))?;
-        runtime()?.block_on(async {
+        self.load(async {
             let (resolved, _) = wx.resolve(spec).await?;
             let acc = wx.accumulate(resolved.window, None).await?;
             Ok(RainReading {
@@ -225,7 +261,7 @@ impl Source for Live {
         quarters: bool,
     ) -> Result<BarsReading> {
         let wx = self.weather(setup, (lat, lon))?;
-        runtime()?.block_on(async {
+        self.load(async {
             let (mut resolved, _) = wx.resolve(spec).await?;
             let quarters = quarters || !resolved.window.is_hour_aligned();
             check_bars_window(resolved.window, quarters)?;
@@ -306,13 +342,17 @@ fn tool_error(e: anyhow::Error, at: &str) -> ToolError {
         return ToolError::not_found(format!("no station near {at} has a recent observation"))
             .with_fix("wx_forecast still answers for this place");
     }
-    let status = e
-        .chain()
-        .find_map(|c| c.downcast_ref::<reqwest::Error>())
-        .and_then(reqwest::Error::status);
-    if status.is_some_and(|s| s.is_client_error() && s.as_u16() != 429) {
-        return ToolError::not_found(format!("NWS has nothing for {at}"))
-            .with_fix("Check the place with the user: NWS covers US land and nearby waters");
+    if e.downcast_ref::<LoadTimedOut>().is_some() {
+        return ToolError::upstream(
+            "the rainfall grids did not finish downloading in time, or another rainfall read \
+             was still running",
+        )
+        .with_fix("Call again: what was downloaded is kept, so it continues from there");
+    }
+    if let Some(status) = http_status(&e) {
+        return ToolError::upstream(format!(
+            "NOAA or the National Weather Service refused the request with HTTP {status}"
+        ));
     }
     let upstream = e.chain().any(|c| {
         c.downcast_ref::<reqwest::Error>().is_some()
@@ -323,6 +363,24 @@ fn tool_error(e: anyhow::Error, at: &str) -> ToolError {
     }
     ToolError::other("wx could not read or write its grid cache, or could not start a client")
         .with_fix("If it persists, ask the user to run `wx status` in a terminal")
+}
+
+/// The status of a refused request, which is safe to repeat where its URL is not.
+fn http_status(e: &anyhow::Error) -> Option<u16> {
+    e.chain()
+        .find_map(|c| c.downcast_ref::<reqwest::Error>())
+        .and_then(reqwest::Error::status)
+        .map(|s| s.as_u16())
+}
+
+/// As [`tool_error`], and NWS's one documented use of a 4xx for a place: `/alerts/active`
+/// answers a 400 for a point outside its coverage.
+fn alerts_error(e: anyhow::Error, asked: &str, query: &AlertQuery) -> ToolError {
+    if matches!(query, AlertQuery::Point(..)) && http_status(&e) == Some(400) {
+        return ToolError::not_found(format!("NWS has no alerts for {asked}"))
+            .with_fix("Check the place with the user: NWS covers US land and nearby waters");
+    }
+    tool_error(e, asked)
 }
 
 /// Which point `at` means: a saved place's name, or `lat,lon`.
@@ -866,7 +924,7 @@ impl<S: Source> WxTools<S> {
         let alerts = self
             .source
             .alerts(&query)
-            .map_err(|e| tool_error(e, &asked))?;
+            .map_err(|e| alerts_error(e, &asked, &query))?;
         let detailed = args.list.format().is_detailed();
         let items: Vec<AlertItem> = alerts
             .into_iter()

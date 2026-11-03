@@ -79,7 +79,9 @@ always reported back.
 `--at` points, or around your saved places, unless `--region
 west,south,east,north` says otherwise. Commands that draw or list a whole area,
 `map` and `gauges`, use your saved places or `--region`. Places live in
-`${XDG_CONFIG_HOME:-~/.config}/wx/config.json`; `wx config path` prints the file.
+`${XDG_CONFIG_HOME:-~/.config}/wx/config.json`; `wx config path` prints the file. On
+Windows `~` is `%USERPROFILE%`. Claude Desktop and launchd do not start from your shell, so
+they do not see an `XDG_CONFIG_HOME` set in a shell profile and read `~/.config`.
 
 Downloaded grids are cached in SQLite under your cache directory, so a repeated
 question downloads nothing. A grid is dropped 92 days after it was downloaded, and the
@@ -159,7 +161,7 @@ for an hourly one. `mrms_hours` gives the MRMS passes behind `mrms_mm`.
 | 0 | ok |
 | 2 | bad usage, including points too far apart to share one grid |
 | 3 | `mcp --http` without a bearer token |
-| 4 | not found, such as a window with no data yet, an area outside MRMS coverage, or a point with no NWS forecast |
+| 4 | not found, such as a window with no data yet, an area outside MRMS coverage, a point with no NWS forecast, or no nearby station with a recent observation |
 | 5 | upstream failure from NOAA or NWS |
 
 ## As a library

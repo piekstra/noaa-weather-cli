@@ -299,7 +299,7 @@ struct Ctx {
 impl Ctx {
     /// Bad flags and bad config fail here, before any network or cache use.
     fn new(cli: &Cli) -> Result<Self> {
-        let config_path = cli.config.clone().unwrap_or_else(default_config_path);
+        let config_path = cli.config.clone().map_or_else(default_config_path, Ok)?;
         let user = UserConfig::load(&config_path)?;
         let region = cli.region.clone().or_else(|| user.region.clone());
         let region_flag = region.map(|r| Region::parse(&r)).transpose()?;
@@ -471,7 +471,7 @@ fn dispatch(cli: Cli) -> Result<()> {
     match &cli.cmd {
         Cmd::Mcp(args) => {
             let settings = Settings {
-                config_path: cli.config.clone().unwrap_or_else(default_config_path),
+                config_path: cli.config.clone().map_or_else(default_config_path, Ok)?,
                 db: cli.db.clone(),
                 region: cli.region.clone(),
                 tz: cli.tz.clone(),
@@ -610,7 +610,8 @@ async fn run(cli: Cli) -> Result<()> {
 fn updater() -> Updater {
     Updater {
         repo: REPO.into(),
-        binary: BIN.into(),
+        // The name inside the release archive, which on Windows is `wx.exe`.
+        binary: format!("{BIN}{}", std::env::consts::EXE_SUFFIX),
         target: env!("BUILD_TARGET").into(),
         current: env!("CARGO_PKG_VERSION").into(),
     }

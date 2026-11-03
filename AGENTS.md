@@ -72,7 +72,8 @@ you downloaded; see the test for the variable it reads.
 
 `--json` prints exactly one document, tagged `<name>/v1`. Pass bare names to
 `output::tagged` and `emit_one`; they append `/v1` themselves. Exit codes: 0 ok,
-2 usage, 4 not found, 5 upstream.
+2 usage, 3 `mcp --http` without a bearer token, 4 not found (including no recent
+station observation), 5 upstream.
 
 ## Shipping
 

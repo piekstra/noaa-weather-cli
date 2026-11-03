@@ -217,7 +217,7 @@ impl NwsClient {
     async fn get_required(&self, url: &str) -> Result<Value> {
         self.get(url)
             .await?
-            .with_context(|| format!("GET {url}: not found"))
+            .ok_or_else(|| UpstreamError(format!("GET {url}: not found")).into())
     }
 
     /// Raw GET against the API, for fields this crate does not model.
