@@ -1,0 +1,53 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:example.1",
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-80.5, 26.0], [-80.0, 26.0], [-80.0, 26.5], [-80.5, 26.0]]]
+      },
+      "properties": {
+        "id": "urn:oid:example.1",
+        "areaDesc": "Example County, FL",
+        "affectedZones": ["https://api.weather.gov/zones/county/FLC999"],
+        "onset": "2026-01-15T12:00:00-05:00",
+        "ends": "2026-01-15T18:00:00-05:00",
+        "expires": "2026-01-15T18:00:00-05:00",
+        "severity": "Severe",
+        "certainty": "Likely",
+        "urgency": "Expected",
+        "event": "Flood Warning",
+        "senderName": "NWS Example FL",
+        "headline": "Flood Warning issued for Example County",
+        "description": "Flooding is expected.",
+        "instruction": "Turn around, don't drown."
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:example.2",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "id": "urn:oid:example.2",
+        "areaDesc": "Coastal Example; Inland Example",
+        "affectedZones": [
+          "https://api.weather.gov/zones/forecast/FLZ998",
+          "https://api.weather.gov/zones/forecast/FLZ999"
+        ],
+        "onset": "2026-01-15T12:00:00-05:00",
+        "ends": null,
+        "expires": "2026-01-16T06:00:00-05:00",
+        "severity": "Minor",
+        "certainty": "Likely",
+        "urgency": "Expected",
+        "event": "Rip Current Statement",
+        "senderName": "NWS Example FL",
+        "headline": "Rip Current Statement issued",
+        "description": "Dangerous rip currents.",
+        "instruction": null
+      }
+    }
+  ]
+}

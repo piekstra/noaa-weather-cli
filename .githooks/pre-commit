@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Pre-commit guard. Enable once with:  git config core.hooksPath .githooks
+set -euo pipefail
+
+# 1) Secret scan (if gitleaks is installed).
+if command -v gitleaks >/dev/null 2>&1; then
+    echo "• gitleaks: scanning staged changes..."
+    gitleaks protect --staged --redact --no-banner
+else
+    echo "• gitleaks not installed — skipping secret scan (install: brew install gitleaks)"
+fi
+
+# 2) Formatting.
+if command -v cargo >/dev/null 2>&1; then
+    echo "• cargo fmt --check..."
+    cargo fmt --all -- --check
+fi
+
+echo "✓ pre-commit checks passed"

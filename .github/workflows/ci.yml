@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Linux only: nothing here touches a platform-specific path, and wx stores no
+  # secrets. macOS is built by the release workflow, on tags.
+  build:
+    name: fmt / clippy / test / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The family auth crate links the Linux keyring backend, which needs libdbus
+      # at build time even though wx never reads a credential.
+      - name: install system deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: |
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --lib --no-default-features --locked -- -D warnings
+      - name: test
+        run: cargo test --all --locked
+      - name: build
+        run: cargo build --release --locked
+      - name: smoke
+        run: |
+          ./target/release/wx --version
+          ./target/release/wx --help > /dev/null
+          ./target/release/wx info > /dev/null
+
+  security:
+    name: audit / deny / secrets
+    runs-on: ubuntu-latest
+    # The gitleaks and audit actions call the PR API on pull_request events, and
+    # fail with "Resource not accessible by integration" on a read-only token.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo-audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,46 @@
+name: release
+
+# Cut a release by pushing a tag like `v0.1.0`. One Linux job and one macOS job
+# (Apple Silicon, which cross-compiles the Intel target). Jobs are independent and
+# each attaches its own assets, so a slow macOS queue never blocks the Linux assets.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: apple (aarch64 + x86_64)
+            targets: "aarch64-apple-darwin x86_64-apple-darwin"
+          - os: ubuntu-latest
+            name: linux x86_64
+            targets: "x86_64-unknown-linux-gnu"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build and package each target
+        run: |
+          for t in ${{ matrix.targets }}; do
+            rustup target add "$t"
+            cargo build --release --locked --target "$t"
+            tar -C "target/$t/release" -czf "wx-$t.tar.gz" wx
+            shasum -a 256 "wx-$t.tar.gz" > "wx-$t.tar.gz.sha256"
+          done
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wx-*.tar.gz
+            wx-*.tar.gz.sha256

@@ -1,0 +1,49 @@
+{
+ "id": "https://api.weather.gov/points/39.74,-104.99",
+ "type": "Feature",
+ "geometry": {
+  "type": "Point",
+  "coordinates": [
+   -104.99,
+   39.74
+  ]
+ },
+ "properties": {
+  "@id": "https://api.weather.gov/points/39.74,-104.99",
+  "@type": "wx:Point",
+  "cwa": "BOU",
+  "gridId": "BOU",
+  "gridX": 62,
+  "gridY": 60,
+  "forecast": "https://api.weather.gov/gridpoints/BOU/62,60/forecast",
+  "forecastHourly": "https://api.weather.gov/gridpoints/BOU/62,60/forecast/hourly",
+  "forecastGridData": "https://api.weather.gov/gridpoints/BOU/62,60",
+  "observationStations": "https://api.weather.gov/gridpoints/BOU/62,60/stations",
+  "relativeLocation": {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -104.98,
+     39.75
+    ]
+   },
+   "properties": {
+    "city": "Example City",
+    "state": "CO",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 0
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 0
+    }
+   }
+  },
+  "forecastZone": "https://api.weather.gov/zones/forecast/COZ999",
+  "county": "https://api.weather.gov/zones/county/COC999",
+  "timeZone": "America/Denver",
+  "radarStation": "KFTG"
+ }
+}
