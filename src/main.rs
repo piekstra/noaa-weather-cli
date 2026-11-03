@@ -369,15 +369,11 @@ impl Ctx {
     }
 
     fn weather_for(&self, region: Region) -> Result<Weather> {
-        let defaults = Config::new(region);
         let cfg = Config {
             tz: self.tz.clone(),
             concurrency: self.concurrency,
-            retain_days: self
-                .user
-                .retain_days
-                .map_or(defaults.retain_days, |days| (days > 0).then_some(days)),
-            ..defaults
+            retain_days: self.user.grid_retention(),
+            ..Config::new(region)
         };
         Weather::new(cfg, self.store()?)
     }

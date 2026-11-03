@@ -317,6 +317,23 @@ impl Store {
         )?)
     }
 
+    /// Drop grids downloaded more than `days` ago, at most once an hour however many
+    /// programs share this file. The cutoff saturates at the epoch, so a huge `days`
+    /// drops nothing.
+    pub fn retain_downloaded(&self, days: i64) -> Result<usize> {
+        const LAST_PASS: &str = "retention_pass";
+        let now = now_secs();
+        if self
+            .meta(LAST_PASS)?
+            .is_some_and(|(_, at)| now - at < 60 * 60)
+        {
+            return Ok(0);
+        }
+        self.set_meta(LAST_PASS, "")?;
+        let cutoff = now.saturating_sub(days.saturating_mul(24 * 60 * 60)).max(0);
+        self.prune_downloaded_before(Timestamp::from_second(cutoff)?)
+    }
+
     pub fn stats(&self) -> Result<CacheStats> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(

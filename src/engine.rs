@@ -19,7 +19,6 @@
 //! instead of 720 hourly ones (~600 MB).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,7 +30,7 @@ use serde::Serialize;
 use crate::ghcn::{GhcnClient, DEFAULT_GHCN_URL};
 use crate::grid::{Grid, Region};
 use crate::mrms::{MrmsClient, Pass, Product, DEFAULT_BUCKET_URL, PASS2_BLOCKS};
-use crate::store::{self, Store};
+use crate::store::Store;
 use crate::window::{floor_quarter, Resolved, Window, WindowSpec, HOUR_SECS, QUARTER_SECS};
 
 /// Longest window served by default: a quarter year.
@@ -59,7 +58,9 @@ pub struct Config {
     /// Simultaneous downloads.
     pub concurrency: usize,
     pub max_hours: i64,
-    /// Days to keep a downloaded grid. `None` keeps everything.
+    /// Days to keep a downloaded grid. `None` keeps everything, and so does a value
+    /// of 0 or less. [`UserConfig::grid_retention`](crate::places::UserConfig::grid_retention)
+    /// reads the setting.
     pub retain_days: Option<i64>,
 }
 
@@ -177,8 +178,6 @@ pub struct Weather {
     ghcn: GhcnClient,
     availability: Mutex<Option<(Instant, Availability)>>,
     latest_quarter: Mutex<Option<(Instant, Timestamp)>>,
-    /// Unix seconds of the last retention pass.
-    retained_at: AtomicI64,
 }
 
 /// How long a cached availability probe is trusted.
@@ -206,7 +205,6 @@ impl Weather {
             ghcn,
             availability: Mutex::new(None),
             latest_quarter: Mutex::new(None),
-            retained_at: AtomicI64::new(0),
         })
     }
 
@@ -749,30 +747,15 @@ impl Weather {
         Ok((None, any_download))
     }
 
-    /// Apply the retention limit, at most once an hour. The cache grows only here, so
-    /// no other path needs it. A failure costs only disk, so the download that prompted
-    /// it goes on.
+    /// Apply the retention limit. The cache grows only on a download, so no other path
+    /// needs it. A limit of 0 or less means nothing rather than everything, because the
+    /// mistake it guards against would empty the cache. A failure costs only disk, so
+    /// the download that prompted it goes on.
     fn forget_old_grids(&self) {
-        let Some(days) = self.cfg.retain_days else {
+        let Some(days) = self.cfg.retain_days.filter(|days| *days > 0) else {
             return;
         };
-        let now = store::now_secs();
-        let last = self.retained_at.load(Ordering::Relaxed);
-        if now - last < HOUR_SECS
-            || self
-                .retained_at
-                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-                .is_err()
-        {
-            return;
-        }
-        let cutoff = now
-            .saturating_sub(days.saturating_mul(24 * HOUR_SECS))
-            .max(0);
-        let pruned = Timestamp::from_second(cutoff)
-            .map_err(anyhow::Error::from)
-            .and_then(|before| self.store.prune_downloaded_before(before));
-        match pruned {
+        match self.store.retain_downloaded(days) {
             Ok(0) => {}
             Ok(n) => tracing::info!(grids = n, days, "dropped cached grids past retention"),
             Err(e) => tracing::warn!(error = %format!("{e:#}"), "cache retention failed"),
@@ -899,32 +882,34 @@ mod tests {
     }
 
     #[test]
-    fn retention_runs_at_most_once_an_hour_and_can_be_turned_off() {
+    fn retention_runs_once_an_hour_across_programs_and_can_be_turned_off() {
         let region = Region::parse("-80.2,26.8,-80.0,27.0").unwrap();
         let p = Product::hourly(Pass::Pass2);
         let valid = Timestamp::from_second(1_800_000_000).unwrap();
-        let weather = |retain_days| {
-            let store = Store::open_in_memory().unwrap();
-            store_a_long_downloaded_grid(&store, &p, valid, &region);
+        let weather = |store: &Store, retain_days| {
             let cfg = Config {
                 retain_days,
                 ..Config::new(region)
             };
-            Weather::new(cfg, store).unwrap()
+            Weather::new(cfg, store.clone()).unwrap()
         };
-        let cached = |wx: &Weather| wx.store().has_grid(&p, valid, &region).unwrap();
+        let cached = |store: &Store| store.has_grid(&p, valid, &region).unwrap();
 
-        let keeps_all = weather(None);
-        keeps_all.forget_old_grids();
-        assert!(cached(&keeps_all));
+        for keeps_all in [None, Some(0), Some(-1)] {
+            let store = Store::open_in_memory().unwrap();
+            store_a_long_downloaded_grid(&store, &p, valid, &region);
+            weather(&store, keeps_all).forget_old_grids();
+            assert!(cached(&store), "{keeps_all:?} should keep everything");
+        }
 
-        let wx = weather(Some(1));
-        wx.forget_old_grids();
-        assert!(!cached(&wx));
+        let store = Store::open_in_memory().unwrap();
+        store_a_long_downloaded_grid(&store, &p, valid, &region);
+        weather(&store, Some(1)).forget_old_grids();
+        assert!(!cached(&store));
 
-        store_a_long_downloaded_grid(wx.store(), &p, valid, &region);
-        wx.forget_old_grids();
-        assert!(cached(&wx), "a second pass within the hour should wait");
+        store_a_long_downloaded_grid(&store, &p, valid, &region);
+        weather(&store, Some(1)).forget_old_grids();
+        assert!(cached(&store), "a second pass within the hour should wait");
     }
 
     /// Hours covered by a plan, each exactly once, as a sorted list.
