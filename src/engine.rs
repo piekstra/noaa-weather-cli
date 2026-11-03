@@ -36,6 +36,9 @@ use crate::window::{floor_quarter, Resolved, Window, WindowSpec, HOUR_SECS, QUAR
 /// Longest window served by default: a quarter year.
 pub const DEFAULT_MAX_HOURS: i64 = 24 * 92;
 
+/// Days a downloaded grid stays cached: the longest window a request may ask for.
+pub const DEFAULT_RETAIN_DAYS: i64 = 92;
+
 /// Longest window for an hour-by-hour series (one bar per hour).
 pub const MAX_SERIES_HOURS: i64 = 24 * 14;
 
@@ -55,6 +58,10 @@ pub struct Config {
     /// Simultaneous downloads.
     pub concurrency: usize,
     pub max_hours: i64,
+    /// Days to keep a downloaded grid. `None` keeps everything, and so does a value
+    /// of 0 or less. [`UserConfig::grid_retention`](crate::places::UserConfig::grid_retention)
+    /// reads the setting.
+    pub retain_days: Option<i64>,
 }
 
 impl Config {
@@ -67,6 +74,7 @@ impl Config {
             ghcn_url: DEFAULT_GHCN_URL.into(),
             concurrency: 6,
             max_hours: DEFAULT_MAX_HOURS,
+            retain_days: Some(DEFAULT_RETAIN_DAYS),
         }
     }
 }
@@ -739,6 +747,21 @@ impl Weather {
         Ok((None, any_download))
     }
 
+    /// Apply the retention limit. The cache grows only on a download, so no other path
+    /// needs it. A limit of 0 or less means nothing rather than everything, because the
+    /// mistake it guards against would empty the cache. A failure costs only disk, so
+    /// the download that prompted it goes on.
+    fn forget_old_grids(&self) {
+        let Some(days) = self.cfg.retain_days.filter(|days| *days > 0) else {
+            return;
+        };
+        match self.store.retain_downloaded(days) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(grids = n, days, "dropped cached grids past retention"),
+            Err(e) => tracing::warn!(error = %format!("{e:#}"), "cache retention failed"),
+        }
+    }
+
     /// Cache, then bucket. `None` when the file does not exist.
     async fn load_one(&self, p: &Product, end_hour: i64) -> Result<Option<(Grid, bool)>> {
         self.load_at(p, ts_hour(end_hour)).await
@@ -764,6 +787,7 @@ impl Weather {
         match self.client.fetch(p, valid, region).await? {
             Some(g) => {
                 self.store.put_grid(p, valid, region, &g)?;
+                self.forget_old_grids();
                 Ok(Some((g, true)))
             }
             None => {
@@ -834,6 +858,59 @@ fn plan_items(s: i64, e: i64, p2: i64, cached: &HashMap<u32, HashSet<i64>>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_a_long_downloaded_grid(store: &Store, p: &Product, valid: Timestamp, r: &Region) {
+        let geom = crate::grid::GridGeom {
+            nx: 1,
+            ny: 1,
+            lat0: 27.0,
+            lon0: -80.1,
+            dlat: 0.01,
+            dlon: 0.01,
+        };
+        let grid = Grid {
+            geom,
+            tenths: vec![5],
+        };
+        store.put_grid(p, valid, r, &grid).unwrap();
+        store
+            .pool()
+            .get()
+            .unwrap()
+            .execute("UPDATE mrms_grids SET fetched_at = 1000", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn retention_runs_once_an_hour_across_programs_and_can_be_turned_off() {
+        let region = Region::parse("-80.2,26.8,-80.0,27.0").unwrap();
+        let p = Product::hourly(Pass::Pass2);
+        let valid = Timestamp::from_second(1_800_000_000).unwrap();
+        let weather = |store: &Store, retain_days| {
+            let cfg = Config {
+                retain_days,
+                ..Config::new(region)
+            };
+            Weather::new(cfg, store.clone()).unwrap()
+        };
+        let cached = |store: &Store| store.has_grid(&p, valid, &region).unwrap();
+
+        for keeps_all in [None, Some(0), Some(-1)] {
+            let store = Store::open_in_memory().unwrap();
+            store_a_long_downloaded_grid(&store, &p, valid, &region);
+            weather(&store, keeps_all).forget_old_grids();
+            assert!(cached(&store), "{keeps_all:?} should keep everything");
+        }
+
+        let store = Store::open_in_memory().unwrap();
+        store_a_long_downloaded_grid(&store, &p, valid, &region);
+        weather(&store, Some(1)).forget_old_grids();
+        assert!(!cached(&store));
+
+        store_a_long_downloaded_grid(&store, &p, valid, &region);
+        weather(&store, Some(1)).forget_old_grids();
+        assert!(cached(&store), "a second pass within the hour should wait");
+    }
 
     /// Hours covered by a plan, each exactly once, as a sorted list.
     fn covered(items: &[Item]) -> Vec<i64> {

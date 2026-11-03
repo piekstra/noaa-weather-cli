@@ -30,6 +30,9 @@ pub struct UserConfig {
     /// NWS alert area: a state or marine code such as `FL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert_area: Option<String>,
+    /// Days to keep a downloaded grid; 0 keeps everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_days: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub places: Vec<Place>,
 }
@@ -45,6 +48,16 @@ pub fn default_config_path() -> PathBuf {
 }
 
 impl UserConfig {
+    /// Days to keep a downloaded grid under this setting, for
+    /// [`Config::retain_days`](crate::engine::Config::retain_days): the default when
+    /// unset, and `None` for 0, which keeps everything.
+    pub fn grid_retention(&self) -> Option<i64> {
+        match self.retain_days {
+            None => Some(crate::engine::DEFAULT_RETAIN_DAYS),
+            Some(days) => (days > 0).then_some(days),
+        }
+    }
+
     /// Read the file; a file that does not exist is an empty config.
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
@@ -95,6 +108,20 @@ impl UserConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retention_is_the_default_when_unset_and_off_at_zero() {
+        let with = |retain_days| UserConfig {
+            retain_days,
+            ..UserConfig::default()
+        };
+        assert_eq!(
+            with(None).grid_retention(),
+            Some(crate::engine::DEFAULT_RETAIN_DAYS)
+        );
+        assert_eq!(with(Some(0)).grid_retention(), None);
+        assert_eq!(with(Some(30)).grid_retention(), Some(30));
+    }
 
     fn place(name: &str) -> Place {
         Place {
