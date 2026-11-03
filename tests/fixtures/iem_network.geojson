@@ -1,0 +1,6 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-105.0, 39.7]}, "properties": {"sid": "SMP", "sname": "Sampleton Airport", "state": "CO", "ncei91": "USW00099999", "online": true}}
+  ]
+}

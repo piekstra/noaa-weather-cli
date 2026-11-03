@@ -32,7 +32,7 @@ wx rain 24h --at cabin                # total at that place and across its regio
 wx series 3d --at cabin               # hour by hour; --step 15m for quarter hours
 wx rain 45m --at cabin                # the last 45 minutes, radar only
 wx map 7d -o week.png                 # color bands around your saved places, with a world file
-wx gauges 7d                          # rain gauges beside MRMS for the same hours
+wx gauges 7d                          # rain gauges beside MRMS for the same hours; today works too
 
 wx radar --at cabin                   # the 2-minute rain rate, newest frames
 wx alerts --at cabin                  # active NWS alerts; --area CO for a state
@@ -51,10 +51,13 @@ wx conditions --at cabin              # the nearest station reporting something 
 | MRMS RadarOnly QPE | 1 km | 15 minutes | no | a few minutes old |
 | MRMS PrecipRate | 1 km | 2 minutes | no | a few minutes old |
 | GHCN-Daily gauges | one gauge | 1 day | they are the gauges | 2 to 3 days old |
+| CoCoRaHS gauges | one gauge | 1 day | they are the gauges | entered that morning |
+| USGS and ASOS gauges | one gauge | 1 hour | they are the gauges | about an hour old |
 
 1 km is the finest gridded rainfall NOAA publishes. Every total reports how many
 of its hours came from each pass, so a provisional figure is never presented as
-final.
+final. Gauge figures from CoCoRaHS, USGS and ASOS are read from those networks
+directly, ahead of GHCN-Daily's checks, and are marked provisional.
 
 ## Windows
 
@@ -86,7 +89,9 @@ changes the limit, and 0 keeps everything.
 ## Output and exit codes
 
 `--json` on any command prints one document tagged `<name>/v1` on stdout.
-Diagnostics go to stderr. `wx info --json` lists capabilities.
+Diagnostics go to stderr. `wx info --json` lists capabilities. In `wx gauges --json`,
+`reports` and `possible` count steps of `step_hours`: days for a daily gauge and hours
+for an hourly one. `mrms_hours` gives the MRMS passes behind `mrms_mm`.
 
 | Code | Meaning |
 |---|---|
@@ -101,13 +106,15 @@ The crate is also the library `noaa_weather`. A program embedding it skips the
 CLI's dependencies:
 
 ```toml
-noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.2.0", default-features = false }
+noaa-weather-cli = { git = "https://github.com/piekstra/noaa-weather-cli", tag = "v0.3.0", default-features = false }
 ```
 
 ## Data
 
 MRMS and GHCN-Daily come from the NOAA Open Data Dissemination Program on AWS.
 Alerts, forecasts and observations come from the National Weather Service API.
+Same-day gauges come from CoCoRaHS volunteers, the USGS Water Data API and the Iowa
+Environmental Mesonet's ASOS archive.
 [docs/api.md](docs/api.md) records each endpoint and its traps.
 
 ## License

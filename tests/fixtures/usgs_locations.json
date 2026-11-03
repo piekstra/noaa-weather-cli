@@ -1,0 +1,7 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "id": "USGS-09999001", "geometry": {"type": "Point", "coordinates": [-105.0, 39.7]}, "properties": {"monitoring_location_name": "SAMPLE CREEK NEAR SAMPLETON"}},
+    {"type": "Feature", "id": "USGS-09999002", "geometry": null, "properties": {"monitoring_location_name": "SAMPLE WELL WITH NO POSITION"}}
+  ]
+}

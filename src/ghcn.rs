@@ -11,8 +11,8 @@
 //!
 //! It is read from NOAA's Open Data bucket (`s3://noaa-ghcn-pds`), the same
 //! place as MRMS. The archive runs **~2–3 days behind** — a report taken this
-//! morning is not in it yet — so gauges answer "how did the radar do last
-//! week?", not "how much fell an hour ago". The UI says so.
+//! morning is not in it yet — so the archive answers "how did the radar do last
+//! week?", and [`feeds`](crate::feeds) answers "how much fell this morning?".
 //!
 //! ## Comparing like with like
 //!
@@ -41,15 +41,17 @@ use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use rusqlite::params;
 use serde::Serialize;
 
-use crate::engine::Weather;
-use crate::grid::Region;
+use crate::engine::{HourCounts, Weather};
+use crate::feeds::{self, FeedStatus, LIVE_SOURCE};
+use crate::grid::{Grid, Region};
 use crate::store::{now_secs, Store};
 use crate::window::{floor_hour, Window, HOUR_SECS};
 
 pub const DEFAULT_GHCN_URL: &str = "https://noaa-ghcn-pds.s3.amazonaws.com";
 
 pub const ATTRIBUTION: &str =
-    "Gauges: NOAA NCEI GHCN-Daily — CoCoRaHS volunteers, NWS cooperative observers, ASOS";
+    "Gauges: NOAA NCEI GHCN-Daily, CoCoRaHS volunteers, USGS Water Data, \
+     Iowa Environmental Mesonet";
 
 /// How often to re-check the per-year archive for new reports.
 const PRCP_REFRESH_SECS: i64 = 6 * 3600;
@@ -74,15 +76,17 @@ pub enum Network {
     Cocorahs,
     Coop,
     Asos,
+    Usgs,
     Other,
 }
 
 impl Network {
     pub fn of(id: &str) -> Self {
         match id.get(0..3) {
-            Some("US1") => Network::Cocorahs,
+            Some("US1" | "CoC") => Network::Cocorahs,
             Some("USC") => Network::Coop,
-            Some("USW") => Network::Asos,
+            Some("USW" | "ASO") => Network::Asos,
+            Some("USG") => Network::Usgs,
             _ => Network::Other,
         }
     }
@@ -92,6 +96,7 @@ impl Network {
             Network::Cocorahs => "CoCoRaHS",
             Network::Coop => "NWS COOP",
             Network::Asos => "ASOS",
+            Network::Usgs => "USGS",
             Network::Other => "GHCN",
         }
     }
@@ -103,27 +108,48 @@ impl Network {
 /// 22–30, ELEVATION 32–37, STATE 39–40, NAME 42–71.
 pub fn parse_stations(text: &str, region: &Region) -> Vec<Station> {
     text.lines()
-        .filter_map(|line| {
-            let field = |a: usize, b: usize| line.get(a..b.min(line.len())).map(str::trim);
-            let id = field(0, 11)?;
-            let lat: f64 = field(12, 20)?.parse().ok()?;
-            let lon: f64 = field(21, 30)?.parse().ok()?;
-            if !region.contains(lat, lon) {
-                return None;
-            }
-            let elev_m = field(31, 37)
-                .and_then(|e| e.parse::<f64>().ok())
-                .filter(|&e| e > -999.0);
-            let name = field(41, 71).unwrap_or("").to_string();
-            Some(Station {
-                id: id.to_string(),
-                name,
-                lat,
-                lon,
-                elev_m,
-            })
-        })
+        .filter_map(parse_station)
+        .filter(|(s, _)| region.contains(s.lat, s.lon))
+        .map(|(s, _)| s)
         .collect()
+}
+
+/// The US states with a station inside `region`, sorted. The feeds read by state.
+pub fn states_in(text: &str, region: &Region) -> Vec<String> {
+    let mut states: Vec<String> = text
+        .lines()
+        .filter_map(parse_station)
+        .filter(|(s, state)| {
+            s.id.starts_with("US") && !state.is_empty() && region.contains(s.lat, s.lon)
+        })
+        .map(|(_, state)| state)
+        .collect();
+    states.sort_unstable();
+    states.dedup();
+    states
+}
+
+/// A line of the station list, with its state, blank where it has none.
+fn parse_station(line: &str) -> Option<(Station, String)> {
+    let field = |a: usize, b: usize| line.get(a..b.min(line.len())).map(str::trim);
+    let id = field(0, 11)?;
+    let lat: f64 = field(12, 20)?.parse().ok()?;
+    let lon: f64 = field(21, 30)?.parse().ok()?;
+    let elev_m = field(31, 37)
+        .and_then(|e| e.parse::<f64>().ok())
+        .filter(|&e| e > -999.0);
+    let name = field(41, 71).unwrap_or("").to_string();
+    let state = field(38, 40).unwrap_or("").to_string();
+    Some((
+        Station {
+            id: id.to_string(),
+            name,
+            lat,
+            lon,
+            elev_m,
+        },
+        state,
+    ))
 }
 
 /// One daily precipitation report.
@@ -480,13 +506,22 @@ pub struct GaugeTotal {
     pub network_label: &'static str,
     pub lat: f64,
     pub lon: f64,
-    /// Daily reports whose full 24 h falls inside the window.
+    /// Reports counted: daily ones whose full 24 h falls inside the window, or the
+    /// hours of an hourly gauge's longest unbroken stretch inside it.
     pub reports: u32,
-    /// Whole days the window spans — the most reports possible.
+    /// The most reports the window could hold at this gauge's step. Like `reports`, it
+    /// counts steps of `step_hours`, so rows of different steps compare only as a ratio.
     pub possible: u32,
+    /// Hours one report covers: 24 or 1.
+    pub step_hours: u32,
+    /// Part of this total has not been through the archive's checks.
+    pub provisional: bool,
     pub gauge_mm: f64,
-    /// MRMS at the gauge's cell, summed over exactly the reported hours.
+    /// MRMS at the gauge's cell, summed over exactly the reported hours. Absent if any of
+    /// them has no product, since a partial sum would make the gauge look high.
     pub mrms_mm: Option<f64>,
+    /// How many of those hours came from each MRMS pass. Recent ones are provisional.
+    pub mrms_hours: HourCounts,
     /// Reports recorded as a trace (too little to measure).
     pub trace_reports: u32,
     /// Reports with no observation time, read as the 07:00 standard.
@@ -502,7 +537,14 @@ pub struct GaugeReport {
     pub archive_through: Option<String>,
     pub gauges: Vec<GaugeTotal>,
     pub stations_in_region: usize,
+    /// The same-day feeds, and why any of them could not be read.
+    pub feeds: Vec<FeedStatus>,
     pub attribution: &'static str,
+}
+
+/// Where the US states a region touches are remembered.
+pub(crate) fn states_key(region: &Region) -> String {
+    format!("ghcn_states:{}", region.key())
 }
 
 impl Weather {
@@ -518,18 +560,21 @@ impl Weather {
 
         let st_key = format!("ghcn_stations:{}", region.key());
         let stale = force
+            || store.meta(&states_key(&region))?.is_none()
             || store
                 .meta(&st_key)?
                 .is_none_or(|(_, at)| now_secs() - at > STATIONS_REFRESH_SECS);
         if stale {
             tracing::info!("refreshing GHCN station list");
             let text = ghcn.get("ghcnd-stations.txt").await?;
-            let stations = parse_stations(&String::from_utf8_lossy(&text), &region);
+            let text = String::from_utf8_lossy(&text);
+            let stations = parse_stations(&text, &region);
             if stations.is_empty() {
                 bail!("no GHCN stations inside the weather region");
             }
             put_stations(store, &region, &stations)?;
             store.set_meta(&st_key, &stations.len().to_string())?;
+            store.set_meta(&states_key(&region), &states_in(&text, &region).join(","))?;
         }
         let ids: HashSet<String> = stations_in(store, &region)?
             .into_iter()
@@ -600,14 +645,34 @@ impl Weather {
             // archive date and can tell it is behind.
             tracing::warn!(error = %e, "GHCN refresh failed; using cached reports");
         }
+        let feeds = self.refresh_feeds(window, false).await;
 
-        let stations = stations_in(self.store(), self.region())?;
+        let mut stations = stations_in(self.store(), self.region())?;
         let ids: Vec<String> = stations.iter().map(|s| s.id.clone()).collect();
-        let reports = reports_between(self.store(), &ids, first, last)?;
+        let mut reports = reports_between(self.store(), &ids, first, last)?;
+        let archived: HashSet<String> = ids.iter().cloned().collect();
+        stations.extend(
+            feeds::stations_in(self.store(), self.region())?
+                .into_iter()
+                .filter(|s| !archived.contains(&s.id)),
+        );
+        reports.extend(feeds::reports_between(self.store(), first, last)?);
+        let mut hourly = feeds::hours_between(
+            self.store(),
+            window.start.as_second(),
+            window.end.as_second(),
+        )?;
+        // The feeds' tables hold every region asked about, and a gauge shown nowhere
+        // should not cost an MRMS sum.
+        let in_region: HashSet<&str> = stations.iter().map(|s| s.id.as_str()).collect();
+        hourly.retain(|id, _| in_region.contains(id.as_str()));
 
         // Keep reports whose 24 h lies inside the window, grouped per station.
         let mut by_station: BTreeMap<String, Vec<(Report, Timestamp, bool)>> = BTreeMap::new();
         for r in reports {
+            if !in_region.contains(r.station.as_str()) {
+                continue;
+            }
             let Some((end, assumed)) = r.period_end(&tz) else {
                 continue;
             };
@@ -630,12 +695,20 @@ impl Weather {
             runs_needed.extend(runs.iter().copied());
             station_runs.insert(id.clone(), runs);
         }
+        for (id, hours) in &hourly {
+            let stretch = feeds::longest_stretch(hours);
+            if let (Some(first), Some(last)) = (stretch.first(), stretch.last()) {
+                let run = (first.end - HOUR_SECS, last.end);
+                runs_needed.insert(run);
+                station_runs.insert(id.clone(), vec![run]);
+            }
+        }
         let mut run_grids = HashMap::new();
         for (s, e) in runs_needed {
             let w = Window::new(Timestamp::from_second(s)?, Timestamp::from_second(e)?);
             match self.accumulate(w, None).await {
                 Ok(acc) => {
-                    run_grids.insert((s, e), acc.grid);
+                    run_grids.insert((s, e), (acc.grid, acc.hours));
                 }
                 Err(err) => tracing::warn!(error = %err, "MRMS for gauge run failed"),
             }
@@ -644,14 +717,42 @@ impl Weather {
         let possible = (window.hours() / 24) as u32;
         let mut gauges = Vec::new();
         for st in &stations {
+            let mrms_at_gauge =
+                || mrms_over_runs(&station_runs[&st.id], &run_grids, st.lat, st.lon);
+            if let Some(stretch) = hourly
+                .get(&st.id)
+                .map(|hours| feeds::longest_stretch(hours))
+                .filter(|s| !s.is_empty())
+            {
+                let (mrms, mrms_hours) = mrms_at_gauge();
+                gauges.push(GaugeTotal {
+                    id: st.id.clone(),
+                    name: st.name.clone(),
+                    network: Network::of(&st.id),
+                    network_label: Network::of(&st.id).label(),
+                    lat: st.lat,
+                    lon: st.lon,
+                    reports: stretch.len() as u32,
+                    possible: window.hours() as u32,
+                    step_hours: 1,
+                    provisional: true,
+                    gauge_mm: (stretch.iter().map(|h| h.mm).sum::<f64>() * 10.0).round() / 10.0,
+                    mrms_mm: mrms,
+                    mrms_hours,
+                    trace_reports: stretch.iter().filter(|h| h.trace).count() as u32,
+                    assumed_time_reports: 0,
+                    covers: [
+                        Timestamp::from_second(stretch[0].end - HOUR_SECS)?,
+                        Timestamp::from_second(stretch[stretch.len() - 1].end)?,
+                    ],
+                });
+                continue;
+            }
             let Some(rs) = by_station.get(&st.id) else {
                 continue;
             };
             let gauge_tenths: i64 = rs.iter().map(|(r, _, _)| r.prcp).sum();
-            let mrms = station_runs[&st.id]
-                .iter()
-                .map(|run| run_grids.get(run).and_then(|g| g.mm_at(st.lat, st.lon)))
-                .sum::<Option<f64>>();
+            let (mrms, mrms_hours) = mrms_at_gauge();
             let first_end = rs.iter().map(|(_, e, _)| *e).min().expect("non-empty");
             let last_end = rs.iter().map(|(_, e, _)| *e).max().expect("non-empty");
             gauges.push(GaugeTotal {
@@ -663,8 +764,13 @@ impl Weather {
                 lon: st.lon,
                 reports: rs.len() as u32,
                 possible,
+                step_hours: 24,
+                provisional: rs
+                    .iter()
+                    .any(|(r, _, _)| r.s_flag.as_deref() == Some(LIVE_SOURCE)),
                 gauge_mm: gauge_tenths as f64 / 10.0,
-                mrms_mm: mrms.map(|v| (v * 10.0).round() / 10.0),
+                mrms_mm: mrms,
+                mrms_hours,
                 trace_reports: rs
                     .iter()
                     .filter(|(r, _, _)| r.m_flag.as_deref() == Some("T"))
@@ -682,7 +788,8 @@ impl Weather {
             archive_through: archive_through(self.store(), &ids)?
                 .map(|d| d.strftime("%Y-%m-%d").to_string()),
             stations_in_region: stations.len(),
-            gauges,
+            gauges: feeds::one_row_per_gauge(gauges),
+            feeds,
             attribution: ATTRIBUTION,
         })
     }
@@ -708,9 +815,73 @@ fn contiguous_runs(ends: impl Iterator<Item = i64>) -> Vec<(i64, i64)> {
     runs
 }
 
+/// MRMS at one point over a gauge's runs of hours, rounded to a tenth of a millimeter, and
+/// how many of those hours came from each pass.
+fn mrms_over_runs(
+    runs: &[(i64, i64)],
+    grids: &HashMap<(i64, i64), (Grid, HourCounts)>,
+    lat: f64,
+    lon: f64,
+) -> (Option<f64>, HourCounts) {
+    let mut hours = HourCounts::default();
+    let mut total = Some(0.0);
+    for run in runs {
+        let at = grids.get(run).and_then(|(grid, counts)| {
+            hours.merge(counts);
+            grid.mm_at(lat, lon)
+        });
+        total = total.zip(at).map(|(sum, mm)| sum + mm);
+    }
+    let complete = total.filter(|_| hours.missing == 0);
+    (complete.map(|mm| (mm * 10.0).round() / 10.0), hours)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::GridGeom;
+
+    #[test]
+    fn mrms_at_a_gauge_carries_its_passes_and_refuses_a_partial_sum() {
+        let geom = GridGeom {
+            nx: 1,
+            ny: 1,
+            lat0: 26.0,
+            lon0: -80.0,
+            dlat: 0.01,
+            dlon: 0.01,
+        };
+        let run = |tenths, pass2, pass1, missing| {
+            let grid = Grid {
+                geom,
+                tenths: vec![tenths],
+            };
+            let hours = HourCounts {
+                pass2,
+                pass1,
+                missing,
+                ..Default::default()
+            };
+            (grid, hours)
+        };
+        let grids = HashMap::from([
+            ((0, 1), run(30, 1, 0, 0)),
+            ((1, 2), run(12, 0, 1, 0)),
+            ((2, 3), run(12, 0, 0, 1)),
+        ]);
+        let at = |runs: &[(i64, i64)]| mrms_over_runs(runs, &grids, 26.0, -80.0);
+
+        let (mm, hours) = at(&[(0, 1), (1, 2)]);
+        assert_eq!(mm, Some(4.2));
+        assert_eq!((hours.pass2, hours.provisional()), (1, 1));
+
+        let (mm, hours) = at(&[(0, 1), (2, 3)]);
+        assert_eq!(mm, None);
+        assert_eq!(hours.missing, 1);
+
+        // A run whose sum could not be made.
+        assert_eq!(at(&[(0, 1), (8, 9)]).0, None);
+    }
 
     fn tz() -> TimeZone {
         TimeZone::get("America/New_York").unwrap()
@@ -729,6 +900,32 @@ mod tests {
 
     fn t(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn names_the_us_states_a_region_touches() {
+        let region = Region {
+            west: -106.0,
+            south: 39.0,
+            east: -100.0,
+            north: 41.0,
+        };
+        let line = |id: &str, lat: f64, lon: f64, state: &str| {
+            format!(
+                "{id:<11} {lat:>8.4} {lon:>9.4} {:>6.1} {state:<2} SAMPLE",
+                100.0
+            )
+        };
+        let text = [
+            line("US1COXX0001", 39.7, -105.0, "CO"),
+            line("USC00000002", 40.5, -101.0, "NE"),
+            line("USW00000003", 39.9, -104.0, "CO"),
+            line("USW00000004", 25.0, -80.0, "FL"),
+            line("CA000000005", 40.0, -102.0, "AB"),
+            line("MXN00000006", 40.0, -103.0, "  "),
+        ]
+        .join("\n");
+        assert_eq!(states_in(&text, &region), ["CO", "NE"]);
     }
 
     #[test]

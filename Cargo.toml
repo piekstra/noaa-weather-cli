@@ -1,6 +1,6 @@
 [package]
 name = "noaa-weather-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Rainfall, radar, alerts, forecasts and current conditions from NOAA and NWS raw data, at the terminal. No API keys. Unofficial."
@@ -35,6 +35,7 @@ cli = [
 [dependencies]
 anyhow = "1"
 bytes = "1"
+csv = "1"
 flate2 = "1"
 futures = "0.3"
 jiff = { version = "0.2", features = ["tzdb-bundle-always", "serde"] }
@@ -42,7 +43,7 @@ parquet = { version = "60", default-features = false, features = ["snap"] }
 png = "0.17"
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["gzip", "json", "rustls-tls-native-roots"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

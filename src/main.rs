@@ -144,11 +144,11 @@ enum Cmd {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
-    /// Rain-gauge totals (CoCoRaHS, NWS COOP, ASOS) beside MRMS for the same hours.
+    /// Rain-gauge totals (CoCoRaHS, NWS COOP, USGS, ASOS) beside MRMS for the same hours.
     Gauges {
         #[command(flatten)]
         w: WindowArg,
-        /// Re-download the gauge archive even if it was checked recently.
+        /// Read the gauge archive and same-day feeds again even if checked recently.
         #[arg(long)]
         refresh: bool,
     },
@@ -793,8 +793,8 @@ async fn status(wx: &Weather, json: bool) -> Result<()> {
         );
     }
     println!(
-        "  gauges: {} stations, {} daily reports",
-        cache.gauge_stations, cache.gauge_reports
+        "  gauges: {} stations, {} daily reports, {} same-day readings",
+        cache.gauge_stations, cache.gauge_reports, cache.feed_readings
     );
     match wx.cfg.retain_days {
         Some(days) => println!("  grids are dropped {days} days after download"),
@@ -1094,10 +1094,11 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
         ];
         years.dedup();
         wx.refresh_gauges(&years, true).await?;
+        wx.refresh_feeds(r.window, true).await;
     }
     let meter = !json && std::io::stderr().is_terminal();
     if meter {
-        eprint!("  reading gauge archive…");
+        eprint!("  reading gauges…");
     }
     let rep = wx.gauges(r.window).await?;
     if meter {
@@ -1115,20 +1116,34 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
         rep.stations_in_region,
         rep.archive_through.as_deref().unwrap_or("—")
     );
+    for feed in &rep.feeds {
+        if let Some(error) = &feed.error {
+            eprintln!(
+                "{} could not be read, so its gauges may be behind: {error}",
+                feed.name
+            );
+        }
+    }
     if rep.gauges.is_empty() {
         println!();
-        println!("  No complete 24 h gauge reports fall inside this window. GHCN-Daily runs");
-        println!("  2–3 days behind; try a window that ends a few days ago, e.g. 7d or 14d.");
+        println!("  No gauge has a whole report inside this window: a daily report needs its");
+        println!("  whole 24 h inside, and an hourly gauge a whole hour. Try 2d or 7d.");
         return Ok(());
     }
     println!();
-    println!(
-        "  {:<12} {:<9} {:<28} {:>4}  {:>7}  {:>7}  {:>7}",
-        "station", "network", "name", "days", "gauge", "MRMS", "diff"
-    );
     let mut rows = rep.gauges.clone();
     rows.sort_by(|a, b| b.gauge_mm.total_cmp(&a.gauge_mm));
+    let id_width = rows.iter().map(|g| g.id.len()).max().unwrap_or(0).max(7);
+    println!(
+        "  {:<id_width$} {:<9} {:<28} {:>7}  {:>7}  {:>7}  {:>7}",
+        "station", "network", "name", "reports", "gauge", "MRMS", "diff"
+    );
     for g in &rows {
+        let mrms_mark = if g.mrms_hours.provisional() > 0 {
+            "*"
+        } else {
+            " "
+        };
         let (mrms, diff) = match g.mrms_mm {
             Some(m) => (
                 format!("{:.2}\"", mm_to_in(m)),
@@ -1136,15 +1151,17 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
             ),
             None => ("—".into(), "".into()),
         };
+        let unit = if g.step_hours == 1 { "h" } else { "d" };
         println!(
-            "  {:<12} {:<9} {:<28} {:>2}/{:<2} {:>6.2}\"  {:>7}  {:>7}",
+            "  {:<id_width$} {:<9} {:<28} {:>7}  {:>6.2}\"{} {:>7}{} {:>7}",
             g.id,
             g.network_label,
             g.name.chars().take(28).collect::<String>(),
-            g.reports,
-            g.possible,
+            format!("{}/{}{unit}", g.reports, g.possible),
             mm_to_in(g.gauge_mm),
+            if g.provisional { "*" } else { " " },
             mrms,
+            mrms_mark,
             diff
         );
     }
@@ -1165,8 +1182,19 @@ async fn gauges(wx: &Weather, spec: &str, json: bool, refresh: bool) -> Result<(
         );
     }
     println!();
-    println!("  Each gauge counts only reports whose whole 24 h is inside the window;");
-    println!("  MRMS is summed over exactly those hours at the gauge's 1 km cell.");
+    println!("  A daily gauge counts only reports whose whole 24 h is inside the window, and");
+    println!("  an hourly gauge its longest unbroken stretch. MRMS is summed over exactly");
+    println!("  those hours at the gauge's 1 km cell. In the reports column, d counts days");
+    println!("  and h counts hours.");
+    if rows.iter().any(|g| g.provisional) {
+        println!("  * Gauge: read from the network directly, not yet through the archive.");
+    }
+    if rows.iter().any(|g| g.mrms_hours.provisional() > 0) {
+        println!("  * MRMS: includes hours not yet through the final pass, so it can change.");
+    }
+    if rows.iter().any(|g| g.mrms_hours.missing > 0) {
+        println!("  — MRMS has no product for some of those hours, so no figure is shown.");
+    }
     println!("  {} · {}", ghcn::ATTRIBUTION, mrms::ATTRIBUTION);
     Ok(())
 }

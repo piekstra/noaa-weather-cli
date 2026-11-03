@@ -5,8 +5,9 @@ Canonical agent entrypoint for this repo. `CLAUDE.md` is a one-line pointer here
 ## What this is
 
 A Rust CLI (`wx`) and library (`noaa_weather`) over NOAA and NWS raw data: MRMS
-rainfall and radar grids on AWS, GHCN-Daily gauges on AWS, and `api.weather.gov`
-for alerts, forecasts and observations. It conforms to the family spec
+rainfall and radar grids on AWS, GHCN-Daily gauges on AWS, `api.weather.gov` for
+alerts, forecasts and observations, and same-day gauges from CoCoRaHS, USGS and the
+Iowa Environmental Mesonet. It conforms to the family spec
 `piekstra-cli/1` from [cli-common](https://github.com/piekstra/cli-common).
 
 Everything is anonymous public data: no credentials, no keychain, no `auth login`.
@@ -36,6 +37,7 @@ you downloaded; see the test for the variable it reads.
 | `src/engine.rs` | Planning which files cover a window, loading, summing. |
 | `src/store.rs` | The SQLite cache. Grids are stored deflated. |
 | `src/ghcn.rs` | GHCN-Daily gauges and the like-for-like comparison with MRMS. |
+| `src/feeds.rs` | Same-day gauges: CoCoRaHS, USGS and ASOS, and how they join the archive. |
 | `src/nws.rs` | `api.weather.gov`: points, forecasts, observations, alerts. |
 | `src/ramp.rs` | The color scales and their validator results. |
 | `src/render.rs` | PNG rendering. |

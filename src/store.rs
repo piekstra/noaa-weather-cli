@@ -129,6 +129,33 @@ impl Store {
                 PRIMARY KEY (product, valid)
             );
 
+            CREATE TABLE IF NOT EXISTS feed_stations (
+                id   TEXT PRIMARY KEY,   -- US1FLPB0012, USGS-02300500, ASOS-PBI
+                name TEXT NOT NULL,
+                lat  REAL NOT NULL,
+                lon  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS feed_stations_place ON feed_stations (lat, lon);
+
+            CREATE TABLE IF NOT EXISTS feed_hours (
+                station  TEXT    NOT NULL,
+                hour_end INTEGER NOT NULL,     -- unix seconds
+                mm       REAL    NOT NULL,
+                trace    INTEGER NOT NULL,
+                measured_rain INTEGER NOT NULL,
+                PRIMARY KEY (station, hour_end)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS feed_hours_end ON feed_hours (hour_end);
+
+            CREATE TABLE IF NOT EXISTS feed_reports (
+                station  TEXT    NOT NULL,
+                date     TEXT    NOT NULL,     -- YYYYMMDD, the report date
+                prcp     INTEGER NOT NULL,     -- tenths of mm, as gauge_obs
+                obs_time TEXT,                 -- HHMM local, as reported
+                m_flag   TEXT,
+                PRIMARY KEY (station, date)
+            ) WITHOUT ROWID;
+
             CREATE TABLE IF NOT EXISTS gauge_stations (
                 id      TEXT PRIMARY KEY,      -- GHCN-Daily station id
                 name    TEXT NOT NULL,
@@ -356,10 +383,16 @@ impl Store {
             conn.query_row("SELECT COUNT(*) FROM gauge_stations", [], |r| r.get(0))?;
         let gauge_reports: i64 =
             conn.query_row("SELECT COUNT(*) FROM gauge_obs", [], |r| r.get(0))?;
+        let feed_readings: i64 = conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM feed_hours) + (SELECT COUNT(*) FROM feed_reports)",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(CacheStats {
             products,
             gauge_stations,
             gauge_reports,
+            feed_readings,
         })
     }
 
@@ -401,6 +434,7 @@ pub struct CacheStats {
     pub products: Vec<CachedProduct>,
     pub gauge_stations: i64,
     pub gauge_reports: i64,
+    pub feed_readings: i64,
 }
 
 #[cfg(test)]

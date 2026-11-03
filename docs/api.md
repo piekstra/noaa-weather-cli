@@ -55,8 +55,8 @@ https://noaa-ghcn-pds.s3.amazonaws.com/parquet/by_year/YEAR=<year>/ELEMENT=PRCP/
 
 Traps:
 
-- **The archive runs 2 to 3 days behind.** Gauges answer "how did the radar do last
-  week", not "how much fell an hour ago".
+- **The archive runs 2 to 3 days behind.** It answers "how did the radar do last week",
+  and the feeds below answer "how much fell this morning".
 - **A report covers the 24 hours ending at its observation time**, not a calendar
   day. Only reports whose whole 24 hours falls inside the window count, and the MRMS
   figure beside each gauge is summed over exactly those hours.
@@ -64,6 +64,81 @@ Traps:
   file has been seen ending 20 months before the per-year Parquet for the same
   station.
 - **`ghcnd-stations.txt` is fixed width**, and -999.9 means no elevation.
+
+## CoCoRaHS export
+
+```text
+https://data.cocorahs.org/export/exportreports.aspx?ReportType=Daily&dtf=1&Format=CSV&ReportDateType=reportdate&TimesInGMT=False&State=<XX>&StartDate=<MM/DD/YYYY>&EndDate=<MM/DD/YYYY>
+```
+
+Traps:
+
+- **A report covers the 24 hours ending at its observation time**, as it does in
+  GHCN-Daily, and is held to the same rule: its whole 24 hours must be inside the
+  window. So `24h` rarely holds one, and `2d` does.
+- **`StationNumber` can start with a space.**
+- **`CO-DN-12` is `US1CODN0012` in GHCN-Daily.** Coordinates agree for numbers with a
+  two-letter county wherever the archive holds them, so those reports join the
+  archive's station. A county of three letters or a number of another shape has no such
+  twin.
+- **The archive wins for a date both hold**, because it has been checked.
+- **`TotalPrecipAmt` is inches, `T` or `NA`.** It is typed by hand, so an amount above
+  the US 24-hour record is treated as a typo.
+- **Reports arrive through the morning and can be revised**, so the last two days are
+  read again.
+
+## USGS Water Data API
+
+```text
+https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?f=json&skipGeometry=true&bbox=<w,s,e,n>&parameter_code=00045&time=<start>/<end>&limit=10000&properties=monitoring_location_id,time_series_id,time,value
+https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?f=json&limit=100&properties=monitoring_location_name&id=<id,id,...>
+```
+
+Traps:
+
+- **`waterservices.usgs.gov/nwis/iv` looks simpler and is being retired.** USGS has
+  scheduled its shutdown for the first quarter of 2027, and it refuses a box over 25
+  square degrees.
+- **The next link can name another API version** than the one called, so only its
+  query is taken.
+- **A null `value` is an outage**, with a qualifier such as `EQUIP`, `SEASONAL`,
+  `UNAVAIL` or `DISCONTINUED`. Present values are strings.
+- **`00045` is the amount in each interval**, not a running total. A site's step can be
+  5, 10, 15, 30 or 60 minutes, so an hour counts only with every reading its step calls
+  for: an hour with a gap would read as less rain than fell.
+- **A site can have two instruments**, as two `time_series_id` values reporting the
+  same times. Only the lowest id is used, or the hour counts double.
+- **Unqualified values can be impossible**, far above the US record for an hour. Such
+  an hour is not counted.
+- **A box can hold tens of thousands of readings a day**, which is why hourly feeds are
+  read back only 3 days and why requests accept gzip.
+
+## Iowa Environmental Mesonet ASOS
+
+```text
+https://mesonet.agron.iastate.edu/geojson/network/<XX>_ASOS.geojson
+https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?network=<XX>_ASOS&data=p01i&data=metar&year1=<y>&month1=<m>&day1=<d>&year2=<y>&month2=<m>&day2=<d>&tz=Etc/UTC&format=onlycomma&latlon=yes&missing=M&trace=T&direct=no&report_type=3
+```
+
+Traps:
+
+- **`p01i` reads 0.00 whenever a METAR has no amount group**, including a report that
+  says it is raining. Reading that column alone shows working-looking gauges at zero
+  under a storm. So `metar` is requested too, and an hour whose report names
+  precipitation with no `Pnnnn` group is not counted.
+- **`PNO` in the remarks means the gauge is out.** `SLPNO` is a different remark.
+- **Some stations never report an amount.** No report of theirs can be told from a dry
+  hour, so an airport appears only once it has reported an amount above zero. In a long
+  dry spell, airports drop out of the comparison.
+- **`p01i` is the rain since the station's last hourly reset**, usually near `:53`. A
+  report stands for the hour ending at the nearest `:00`, offset from MRMS's hour by
+  several minutes.
+- **`day2` is exclusive, and `station=` alone returns nothing.** `network=` can be
+  repeated.
+- **Airports are matched to GHCN-Daily by distance, not id.** `ncei91` names a nearby
+  normals station, a `GHCNH_ID` can point at a station far from the airport, and an
+  airport's own id can change. Within 3 km is the same gauge, and the row covering more
+  hours is kept.
 
 ## api.weather.gov
 
@@ -96,9 +171,15 @@ Traps:
 
 ## Coverage gaps
 
-- Same-day gauges are not read. CoCoRaHS, USGS and ASOS current feeds exist but
-  have no client here.
+- South Florida Water Management District gauges are not read: the service could not
+  be reached when tried.
+- An airport whose gauge stops working after it has reported an amount still shows,
+  reading low. The figure beside MRMS is what exposes it.
 - Not yet verified: how MRMS behaves at the edges of the domain outside the US.
+- Not yet verified: the USGS API's rate limits, since its responses name none.
+- Not yet verified: whether CoCoRaHS attaches terms to exported reports beyond the
+  Creative Commons Attribution license its site carries. The attribution line credits
+  it either way.
 
 ## Update trigger
 
