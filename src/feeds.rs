@@ -133,7 +133,6 @@ impl FeedClient {
                 ))
                 .connect_timeout(Duration::from_secs(15))
                 .read_timeout(stall)
-                .timeout(Duration::from_secs(90))
                 .build()?,
             usgs: base(usgs),
             cocorahs: base(cocorahs),
