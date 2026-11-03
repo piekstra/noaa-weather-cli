@@ -28,7 +28,8 @@ use jiff::{tz::TimeZone, Timestamp};
 use serde::Serialize;
 
 use crate::feeds::{
-    FeedClient, DEFAULT_COCORAHS_URL, DEFAULT_FEED_DEADLINE, DEFAULT_IEM_URL, DEFAULT_USGS_URL,
+    FeedClient, DEFAULT_COCORAHS_URL, DEFAULT_FEED_DEADLINE, DEFAULT_FEED_STALL, DEFAULT_IEM_URL,
+    DEFAULT_USGS_URL,
 };
 use crate::ghcn::{GhcnClient, DEFAULT_GHCN_URL};
 use crate::grid::{Grid, Region};
@@ -64,7 +65,9 @@ pub struct Config {
     pub cocorahs_url: String,
     /// Iowa Environmental Mesonet, for same-day gauges.
     pub iem_url: String,
-    /// How long one gauge feed may take before its cached rows answer instead.
+    /// How long a gauge feed's request may go silent before its cached rows answer instead.
+    pub feed_stall: Duration,
+    /// How long one gauge feed may take in all before its cached rows answer instead.
     pub feed_deadline: Duration,
     /// Simultaneous downloads.
     pub concurrency: usize,
@@ -86,6 +89,7 @@ impl Config {
             usgs_url: DEFAULT_USGS_URL.into(),
             cocorahs_url: DEFAULT_COCORAHS_URL.into(),
             iem_url: DEFAULT_IEM_URL.into(),
+            feed_stall: DEFAULT_FEED_STALL,
             feed_deadline: DEFAULT_FEED_DEADLINE,
             concurrency: 6,
             max_hours: DEFAULT_MAX_HOURS,
@@ -214,7 +218,12 @@ impl Weather {
     pub fn new(cfg: Config, store: Store) -> Result<Self> {
         let client = MrmsClient::new(&cfg.bucket_url, cfg.concurrency)?;
         let ghcn = GhcnClient::new(&cfg.ghcn_url)?;
-        let feeds = FeedClient::new(&cfg.usgs_url, &cfg.cocorahs_url, &cfg.iem_url)?;
+        let feeds = FeedClient::new(
+            &cfg.usgs_url,
+            &cfg.cocorahs_url,
+            &cfg.iem_url,
+            cfg.feed_stall,
+        )?;
         Ok(Self {
             cfg,
             store,

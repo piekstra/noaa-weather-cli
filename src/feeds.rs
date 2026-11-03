@@ -39,9 +39,11 @@ use crate::window::Window;
 pub const DEFAULT_USGS_URL: &str = "https://api.waterdata.usgs.gov/ogcapi/v1";
 pub const DEFAULT_COCORAHS_URL: &str = "https://data.cocorahs.org";
 pub const DEFAULT_IEM_URL: &str = "https://mesonet.agron.iastate.edu";
-/// Several times the slowest first read seen: 13 s, USGS over a 10 by 6 degree box and
-/// 3 days of mostly 5 and 15 minute readings.
-pub const DEFAULT_FEED_DEADLINE: Duration = Duration::from_secs(60);
+/// How long a request may go without a byte before its feed counts as failed.
+pub const DEFAULT_FEED_STALL: Duration = Duration::from_secs(30);
+/// A backstop for a feed that keeps moving, so a slow connection can still finish a first
+/// read. The slowest seen on a fast one took 13 s: USGS, a 10 by 6 degree box, 3 days.
+pub const DEFAULT_FEED_DEADLINE: Duration = Duration::from_secs(300);
 
 /// `s_flag` on a report from a feed, so a total can say it holds unchecked figures.
 pub const LIVE_SOURCE: &str = "live";
@@ -120,7 +122,7 @@ pub struct FeedClient {
 }
 
 impl FeedClient {
-    pub fn new(usgs: &str, cocorahs: &str, iem: &str) -> Result<Self> {
+    pub fn new(usgs: &str, cocorahs: &str, iem: &str, stall: Duration) -> Result<Self> {
         let base = |s: &str| s.trim_end_matches('/').to_string();
         Ok(Self {
             http: reqwest::Client::builder()
@@ -130,6 +132,7 @@ impl FeedClient {
                     " (+https://github.com/piekstra/noaa-weather-cli)"
                 ))
                 .connect_timeout(Duration::from_secs(15))
+                .read_timeout(stall)
                 .timeout(Duration::from_secs(90))
                 .build()?,
             usgs: base(usgs),
@@ -138,7 +141,8 @@ impl FeedClient {
         })
     }
 
-    /// One text body. A busy or failing upstream gets two more tries, spaced out.
+    /// One text body. A busy or failing upstream gets two more tries, spaced out. One that
+    /// stopped answering does not, since cached rows can answer in the meantime.
     async fn get(&self, url: &str) -> Result<String> {
         let mut last = None;
         for wait in [0, 2, 6] {
@@ -153,6 +157,9 @@ impl FeedClient {
                     last = Some(anyhow::anyhow!("GET {url}: {}", r.status()));
                 }
                 Ok(r) => anyhow::bail!("GET {url}: {}", r.status()),
+                Err(e) if e.is_timeout() => {
+                    return Err(anyhow::Error::new(e).context(format!("GET {url}")));
+                }
                 Err(e) => last = Some(anyhow::Error::new(e).context(format!("GET {url}"))),
             }
         }

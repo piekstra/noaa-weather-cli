@@ -460,10 +460,10 @@ fn test_region() -> Region {
 }
 
 fn weather_against(stub: &Stub) -> Weather {
-    weather_with_deadline(stub, DEFAULT_FEED_DEADLINE)
+    weather_with(stub, DEFAULT_FEED_STALL, DEFAULT_FEED_DEADLINE)
 }
 
-fn weather_with_deadline(stub: &Stub, feed_deadline: Duration) -> Weather {
+fn weather_with(stub: &Stub, feed_stall: Duration, feed_deadline: Duration) -> Weather {
     let cfg = Config {
         tz: TimeZone::UTC,
         bucket_url: stub.url.clone(),
@@ -471,6 +471,7 @@ fn weather_with_deadline(stub: &Stub, feed_deadline: Duration) -> Weather {
         usgs_url: stub.url.clone(),
         cocorahs_url: stub.url.clone(),
         iem_url: stub.url.clone(),
+        feed_stall,
         feed_deadline,
         ..Config::new(test_region())
     };
@@ -554,13 +555,14 @@ async fn a_repeated_question_asks_nobody_and_the_gauges_come_back_provisional() 
     assert!(report.feeds.iter().all(|f| f.error.is_none()));
 }
 
-#[tokio::test]
-async fn a_stalled_feed_is_named_and_does_not_hold_up_the_answer() {
-    let server = stub(|_| {
+fn silent_stub() -> Stub {
+    stub(|_| {
         std::thread::sleep(Duration::from_secs(5));
         None
-    });
-    let wx = weather_with_deadline(&server, Duration::from_millis(200));
+    })
+}
+
+async fn errors_within_two_seconds(wx: &Weather) -> Vec<String> {
     let end = recent_end();
     let start = Timestamp::from_second(end.as_second() - 26 * HOUR).unwrap();
     let began = std::time::Instant::now();
@@ -570,13 +572,28 @@ async fn a_stalled_feed_is_named_and_does_not_hold_up_the_answer() {
         "{:?}",
         began.elapsed()
     );
-    for status in statuses {
-        let error = status.error.unwrap_or_default();
-        assert!(
-            error.contains("no complete answer"),
-            "{}: {error}",
-            status.name
-        );
+    statuses
+        .into_iter()
+        .map(|s| s.error.unwrap_or_default())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_silent_feed_fails_once_and_is_named() {
+    let server = silent_stub();
+    let wx = weather_with(&server, Duration::from_millis(100), DEFAULT_FEED_DEADLINE);
+    // Two more tries would take at least the 8 s between them.
+    for error in errors_within_two_seconds(&wx).await {
+        assert!(error.contains("GET "), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn the_deadline_bounds_a_feed_that_never_trips_the_stall_limit() {
+    let server = silent_stub();
+    let wx = weather_with(&server, DEFAULT_FEED_STALL, Duration::from_millis(200));
+    for error in errors_within_two_seconds(&wx).await {
+        assert!(error.contains("no complete answer"), "{error}");
     }
 }
 
