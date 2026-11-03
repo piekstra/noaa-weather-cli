@@ -694,6 +694,27 @@ fn a_required_nws_call_that_finds_nothing_is_upstream_and_not_the_cache() {
     assert_no_coordinates(&text);
 }
 
+/// No station could answer, so this says nothing about the place.
+#[test]
+fn an_observation_outage_is_upstream_and_not_no_recent_observation() {
+    let dir = tempfile::tempdir().unwrap();
+    let cell: Arc<Mutex<String>> = Arc::default();
+    let shared = cell.clone();
+    let (url, _) = stub(move |path| {
+        if path.ends_with("/observations/latest") {
+            return (503, String::new());
+        }
+        let base = shared.lock().unwrap().clone();
+        nws_route(&base, path)
+    });
+    *cell.lock().unwrap() = url.clone();
+    let t = live(dir.path(), &url);
+    let text = error_text(&call(&t, CONDITIONS_TOOL, json!({"at": "Example Beach"})));
+    assert!(text.starts_with("upstream:"), "{text}");
+    assert!(!text.contains("recent observation"), "{text}");
+    assert_no_coordinates(&text);
+}
+
 fn live_source(dir: &Path) -> Live {
     Live::new(Settings {
         config_path: dir.join("config.json"),

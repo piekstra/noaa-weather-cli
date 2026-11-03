@@ -291,11 +291,22 @@ impl NwsClient {
             .await?;
         let stations = parse_stations(&list);
         let now = Timestamp::now();
+        let mut answered = false;
+        let mut failure = None;
         for s in &stations {
             let url = format!("{}/stations/{}/observations/latest", self.base, s.id);
-            let Ok(Some(v)) = self.get(&url).await else {
-                continue;
+            let v = match self.get(&url).await {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    answered = true;
+                    continue;
+                }
+                Err(e) => {
+                    failure = Some(e);
+                    continue;
+                }
             };
+            answered = true;
             let Some(c) = parse_observation(&v, s, lat, lon) else {
                 continue;
             };
@@ -306,6 +317,11 @@ impl NwsClient {
             if fresh && c.temperature_f.is_some() {
                 return Ok(c);
             }
+        }
+        // "Nothing recent" is a fact only if a station said so. If none could answer, the
+        // service failed, and that says nothing about the place.
+        if let (false, Some(e)) = (answered, failure) {
+            return Err(e);
         }
         Err(NoObservation {
             stations: stations.len(),

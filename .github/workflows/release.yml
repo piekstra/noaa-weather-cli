@@ -136,6 +136,10 @@ jobs:
           for b in "${bins[@]}"; do
             "$b" --version
             "$b" mcp --list-tools > /dev/null
+            # What Claude Desktop sees on Windows: no HOME, so the config follows USERPROFILE.
+            if [ "$RUNNER_OS" = Windows ]; then
+              env -u HOME -u XDG_CONFIG_HOME "$b" config path
+            fi
           done
       - uses: actions/upload-artifact@v4
         with:

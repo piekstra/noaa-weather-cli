@@ -10,7 +10,8 @@ All notable changes to `wx` are documented here. Newest first. The project follo
   127.0.0.1 behind a bearer token for Claude on the web and mobile through your own
   Cloudflare Worker and tunnel. No tool writes anything but the grid cache.
 - A tool takes a saved place by name and no result or error repeats its coordinates.
-- `wx conditions` exits 4 when no nearby station has a recent observation. It exited 1.
+- `wx conditions` exits 4 when stations answered and none has a recent observation, and 5 when
+  none could answer. It exited 1 for both.
 - A 404 on an NWS call that must succeed, such as a station list, exits 5. It exited 1.
 - The config and cache follow `USERPROFILE` on Windows. With no home directory the config is
   an error, not a file in a temp directory that a cleanup can remove.
