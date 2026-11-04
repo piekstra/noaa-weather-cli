@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "noaa-weather-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1634,6 +1634,7 @@ dependencies = [
  "jiff",
  "parquet",
  "pk-cli-auth",
+ "pk-cli-config",
  "pk-cli-core",
  "pk-cli-mcp",
  "pk-cli-selfupdate",
@@ -1886,8 +1887,8 @@ dependencies = [
 
 [[package]]
 name = "pk-cli-auth"
-version = "0.25.0"
-source = "git+https://github.com/piekstra/cli-common?tag=v0.25.0#bdef8c4248dfa6d45bf934f2f31b22dc9f77c255"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
 dependencies = [
  "clap",
  "pk-cli-core",
@@ -1897,9 +1898,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pk-cli-config"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
+dependencies = [
+ "pk-cli-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pk-cli-core"
-version = "0.25.0"
-source = "git+https://github.com/piekstra/cli-common?tag=v0.25.0#bdef8c4248dfa6d45bf934f2f31b22dc9f77c255"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
 dependencies = [
  "clap",
  "libc",
@@ -1910,8 +1921,8 @@ dependencies = [
 
 [[package]]
 name = "pk-cli-mcp"
-version = "0.25.0"
-source = "git+https://github.com/piekstra/cli-common?tag=v0.25.0#bdef8c4248dfa6d45bf934f2f31b22dc9f77c255"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
 dependencies = [
  "bytes",
  "clap",
@@ -1931,8 +1942,8 @@ dependencies = [
 
 [[package]]
 name = "pk-cli-secrets"
-version = "0.25.0"
-source = "git+https://github.com/piekstra/cli-common?tag=v0.25.0#bdef8c4248dfa6d45bf934f2f31b22dc9f77c255"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
 dependencies = [
  "clap",
  "keyring",
@@ -1945,8 +1956,8 @@ dependencies = [
 
 [[package]]
 name = "pk-cli-selfupdate"
-version = "0.25.0"
-source = "git+https://github.com/piekstra/cli-common?tag=v0.25.0#bdef8c4248dfa6d45bf934f2f31b22dc9f77c255"
+version = "0.29.0"
+source = "git+https://github.com/piekstra/cli-common?tag=v0.29.0#0aa4887ae7313ae258a3283986b82d1bd4518a7b"
 dependencies = [
  "clap",
  "flate2",

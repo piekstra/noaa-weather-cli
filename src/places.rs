@@ -54,16 +54,9 @@ pub fn parse_point(s: &str) -> std::result::Result<(f64, f64), String> {
 /// `${XDG_CONFIG_HOME:-~/.config}/wx/config.json`.
 ///
 /// With no home directory this is an error and not a temp directory: saved places cannot
-/// be fetched again. `~` is `HOME`, and on Windows `USERPROFILE`, whatever shell started `wx`.
+/// be fetched again.
 pub fn default_config_path() -> Result<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))
-        .ok_or_else(|| {
-            anyhow::anyhow!("no home directory for the config: set XDG_CONFIG_HOME or use --config")
-        })?;
-    Ok(base.join("wx").join("config.json"))
+    Ok(pk_cli_config::ConfigStore::new("wx").path()?)
 }
 
 impl UserConfig {

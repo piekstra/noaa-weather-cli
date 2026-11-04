@@ -9,7 +9,7 @@ rainfall and radar grids on AWS, GHCN-Daily gauges on AWS, `api.weather.gov` for
 alerts, forecasts and observations, and same-day gauges from CoCoRaHS, USGS and the
 Iowa Environmental Mesonet. It conforms to the family spec
 `piekstra-cli/1` from [cli-common](https://github.com/piekstra/cli-common), pinned to
-**v0.25.0**.
+**v0.29.0**.
 
 Everything is anonymous public data: no credentials and no `auth login`. `auth status`
 exists because the spec requires it and reports `required: false`. The only keychain item is

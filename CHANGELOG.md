@@ -3,6 +3,11 @@
 All notable changes to `wx` are documented here. Newest first. The project follows
 [SemVer](https://semver.org/); until 1.0, minors carry the breaking-change signal.
 
+## v0.4.1 — 2026-11-04
+
+- The config path and `self-update`'s archive name come from cli-common, which now covers `USERPROFILE` and `wx.exe`, in place of this crate's own copies.
+- cli-common v0.29.0, up from v0.25.0.
+
 ## 0.4.0 — 2026-11-03
 
 - `wx mcp`: four read-only tools for Claude: `wx_rain`, `wx_forecast`, `wx_conditions` and

@@ -1,6 +1,6 @@
 [package]
 name = "noaa-weather-cli"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.89"
 description = "Rainfall, radar, alerts, forecasts and current conditions from NOAA and NWS raw data, at the terminal. No API keys. Unofficial."
@@ -55,15 +55,16 @@ tracing = "0.1"
 
 clap = { version = "4", features = ["derive", "env"], optional = true }
 clap_complete = { version = "4", optional = true }
-pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.25.0", optional = true }
-pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.25.0", features = ["reqwest"], optional = true }
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.25.0", features = ["stdio", "http"], optional = true }
-pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.25.0", optional = true }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0", optional = true }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0" }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0", features = ["reqwest"], optional = true }
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0", features = ["stdio", "http"], optional = true }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0", optional = true }
 schemars = { version = "1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
-pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.25.0", features = ["test-util"] }
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.29.0", features = ["test-util"] }
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
