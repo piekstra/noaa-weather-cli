@@ -610,8 +610,7 @@ async fn run(cli: Cli) -> Result<()> {
 fn updater() -> Updater {
     Updater {
         repo: REPO.into(),
-        // The name inside the release archive, which on Windows is `wx.exe`.
-        binary: format!("{BIN}{}", std::env::consts::EXE_SUFFIX),
+        binary: BIN.into(),
         target: env!("BUILD_TARGET").into(),
         current: env!("CARGO_PKG_VERSION").into(),
     }
