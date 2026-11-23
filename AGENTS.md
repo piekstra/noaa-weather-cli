@@ -21,7 +21,6 @@ the bearer token of `mcp --http`, written by `mcp --new-token`, so there is no `
 ```sh
 make verify     # fmt-check, clippy (with and without the cli feature), tests, smoke
 make install    # signed, from the reviewed Cargo.lock
-git config core.hooksPath .githooks   # pre-commit gitleaks and fmt
 ```
 
 Tests are offline. `cargo test -- --ignored real_file` decodes a real MRMS file
