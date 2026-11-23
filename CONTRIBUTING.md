@@ -5,7 +5,6 @@
 ```sh
 git clone https://github.com/piekstra/noaa-weather-cli
 cd noaa-weather-cli
-git config core.hooksPath .githooks     # pre-commit gitleaks and fmt
 make verify
 ```
 
