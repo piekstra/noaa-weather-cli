@@ -16,7 +16,7 @@
   "homepage": "https://github.com/piekstra/noaa-weather-cli",
   "documentation": "https://github.com/piekstra/noaa-weather-cli#use-with-claude",
   "support": "https://github.com/piekstra/noaa-weather-cli/issues",
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "weather",
     "rainfall",
